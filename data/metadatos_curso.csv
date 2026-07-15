@@ -1,0 +1,17 @@
+sample_id,study,status,severity
+SRR13639990,GSE166253,convalescent,moderate
+SRR13639992,GSE166253,convalescent,moderate
+SRR13639993,GSE166253,convalescent,moderate
+SRR13639994,GSE166253,convalescent,moderate
+SRR13639995,GSE166253,acute,moderate
+SRR13639999,GSE166253,acute,moderate
+SRR13640002,GSE166253,acute,moderate
+SRR13640004,GSE166253,acute,moderate
+SRR19173185,GSE202805,acute,severe_and_icu
+SRR19173191,GSE202805,convalescent,severe_and_icu
+SRR19173211,GSE202805,convalescent,severe_and_icu
+SRR19173215,GSE202805,convalescent,severe_and_icu
+SRR19173217,GSE202805,convalescent,severe
+SRR19173231,GSE202805,acute,severe_and_icu
+SRR19173232,GSE202805,acute,severe
+SRR19173243,GSE202805,acute,severe_and_icu

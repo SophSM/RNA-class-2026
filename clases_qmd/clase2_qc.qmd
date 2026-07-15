@@ -1,0 +1,391 @@
+
+---
+title: "Clase 2: Control de calidad de lecturas (FastQC y Trimmomatic)"
+subtitle: "Curso: Análisis de bulk RNA-seq"
+author: "Sofia Salazar"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    theme: cosmo
+execute:
+  eval: false
+  echo: true
+---
+
+## Objetivos de la clase
+
+Al finalizar esta sesión podrás:
+
+- Entender el formato FASTQ y el Phred score
+
+- Correr FastQC para evaluar la calidad de lecturas
+
+- Interpretar los reportes de MultiQC
+
+- Correr Trimmomatic para filtrar lecturas de baja calidad y remover adaptadores
+
+- Hacer QC post-trimming para confirmar la mejora
+
+---
+
+## 1. El formato FASTQ
+
+Un archivo FASTQ es el formato estándar para almacenar lecturas de secuenciación. Cada lectura ocupa **4 líneas**:
+
+```
+@SEQ_ID
+GATTTGGGGTTCAAAGCAGTATCGATCAAATAGTAAATCCATTTGTTCAACTCACAGTTT
++
+!''*((((***+))%%%++)(%%%%).1***-+*''))**55CCF>>>>>>CCCCCCC65
+```
+
+| Línea | Contenido |
+|-------|-----------|
+| 1 | Identificador de la lectura (empieza con `@`) |
+| 2 | Secuencia de nucleótidos |
+| 3 | Separador `+` |
+| 4 | Calidad en formato ASCII (Phred score) |
+
+### El Phred Score
+
+El Phred score (Q) mide la calidad del llamado de cada base:
+
+$$Q = -10 \log_{10} P$$
+
+donde $P$ es la probabilidad de que la base sea incorrecta.
+
+| Q score | Probabilidad de error | Precisión |
+|---------|-----------------------|-----------|
+| Q10     | 1 en 10               | 90%       |
+| Q20     | 1 en 100              | 99%       |
+| Q30     | 1 en 1,000            | 99.9%     |
+| Q40     | 1 en 10,000           | 99.99%    |
+
+**Generalmente queremos Q ≥ 20**, y preferimos Q ≥ 30.
+
+En el archivo FASTQ, la calidad se codifica como caracteres ASCII. Por ejemplo, el carácter `I` corresponde a Q=40.
+
+---
+
+## 2. FastQC
+
+**FastQC** analiza la calidad de archivos FASTQ y genera un reporte HTML con múltiples métricas.
+
+### Instalación en un ambiente de conda
+
+```{bash}
+# Con conda (recomendado)
+conda install -c bioconda fastqc
+
+# O desde el sitio oficial:
+# https://www.bioinformatics.babraham.ac.uk/projects/fastqc/
+```
+
+### Cargar en un el servidor Fénix
+
+```{bash}
+module load fastqc/0.11.3
+```
+
+### Correr FastQC
+
+```{bash}
+# Crear carpeta para los outputs
+cd rna
+mkdir -p quality1
+
+# Correr FastQC en un solo archivo
+fastqc data/SRR12363092_1.fastq.gz \
+  -o quality1/
+
+# Correr FastQC en todos los archivos FASTQ (loop)
+for file in data/*.fastq.gz; do
+  fastqc "$file" -o quality1/
+done
+```
+
+### Módulos del reporte de FastQC
+
+FastQC genera una carpeta `.zip` y un archivo `.html` por muestra. Los módulos más importantes son:
+
+| Módulo | Qué evalúa |
+|--------|------------|
+| Per base sequence quality | Calidad promedio por posición de la lectura |
+| Per sequence quality scores | Distribución de calidades por lectura |
+| Per base sequence content | Proporción de A, T, G, C por posición |
+| Per sequence GC content | Distribución del contenido GC |
+| Sequence duplication levels | Qué tan repetidas están las lecturas |
+| Adapter content | Presencia de secuencias de adaptadores |
+
+**Banderas de FastQC:**
+- Verde: PASS
+- Amarillo: WARN
+- Rojo: FAIL
+
+No siempre un FAIL significa un problema grave. Hay que interpretarlo en contexto.
+
+---
+
+## 3. MultiQC
+
+**MultiQC** toma los reportes de FastQC de todas las muestras y genera un reporte unificado para comparar todas las muestras a la vez.
+
+### Instalación
+
+```{bash}
+# Con conda
+conda install -c bioconda multiqc
+
+# O con pip
+pip install multiqc
+```
+
+### Correr MultiQC
+
+```{bash}
+srun -p interactive --pty bash
+
+# Apuntar a la carpeta donde están los outputs de FastQC
+multiqc rna/quality1/ \
+  -o rna/quality1/
+
+export SEQERA_ACCESS_TOKEN=""
+
+multiqc quality1/ \
+  -o quality1/ \
+  --ai-summary-full \
+  --ai-provider seqera
+```
+
+Esto genera `multiqc_report.html` que se puede abrir en el navegador.
+
+### ¿Qué buscar en el reporte de MultiQC?
+
+1. **General statistics:** Número de lecturas por muestra, % GC, longitud de lectura
+2. **Sequence counts:** Lecturas únicas vs. duplicadas — deben ser similares entre muestras
+3. **Per base sequence quality:** Las colas de las lecturas (posiciones finales) suelen caer en calidad — esto es normal
+4. **Adapter content:** Si hay mucha contaminación de adaptadores → necesitamos trimming
+
+---
+
+## 4. Trimmomatic
+
+**Trimmomatic** es una herramienta para:
+
+- Eliminar adaptadores de secuenciación
+
+- Cortar bases de baja calidad del inicio o final de las lecturas
+
+- Descartar lecturas demasiado cortas después del trimming
+
+### Instalación
+
+```{bash}
+# Con conda
+conda install -c bioconda trimmomatic
+# O module load trimmomatic/0.33 en fenix
+```
+
+### Archivos de adaptadores
+
+Para remover los adaptadores, Trimmomatic necesita un archivo FASTA con las secuencias de adaptadores:
+
+```{bash}
+# Descargar adaptadores TruSeq (los más comunes en Illumina)
+wget https://raw.githubusercontent.com/timflutre/trimmomatic/master/adapters/TruSeq3-PE-2.fa
+
+# O en el caso de los estudios de COVID:
+wget https://raw.githubusercontent.com/timflutre/trimmomatic/refs/heads/master/adapters/NexteraPE-PE.fa
+# https://www.biostars.org/p/9565640/
+```
+
+### Salidas de Trimmomatic (Paired-End)
+
+Para cada par de lecturas (`_1.fastq.gz` y `_2.fastq.gz`), Trimmomatic genera 4 archivos:
+
+| Archivo | Contenido |
+|---------|-----------|
+| `_1_trimmed.fq.gz` | Lecturas del archivo 1 que quedaron con su par |
+| `_2_trimmed.fq.gz` | Lecturas del archivo 2 que quedaron con su par |
+| `_1_unpaired.fq.gz` | Lecturas del archivo 1 que perdieron su par |
+| `_2_unpaired.fq.gz` | Lecturas del archivo 2 que perdieron su par |
+
+Para el alineamiento usaremos solo los **trimmed** (pareados).
+
+### Correr Trimmomatic
+
+```{bash}
+# Crear carpeta para resultados
+mkdir -p rna/TRIM_results
+
+# Correr Trimmomatic para un par de muestras
+trimmomatic PE \
+  -threads 8 \
+  -phred33 \
+  rna/data/SRR13639990_1.fastq.gz \
+  rna/data/SRR13639990_2.fastq.gz \
+  rna/TRIM_results/SRR12363092_1_trimmed.fq.gz \
+  rna/TRIM_results/SRR12363092_1_unpaired.fq.gz \
+  rna/TRIM_results/SRR12363092_2_trimmed.fq.gz \
+  rna/TRIM_results/SRR12363092_2_unpaired.fq.gz \
+  ILLUMINACLIP:rna/data/NexteraPE-PE.fa:5:10:5 \
+  LEADING:3 \
+  TRAILING:3 \
+  SLIDINGWINDOW:4:20 \
+  MINLEN:80
+```
+
+### Loop para todas las muestras
+
+```{bash}
+cd rna/data/
+
+for i in *_1.fastq.gz; do
+  base="${i%_1.fastq.gz}"
+  echo "Procesando muestra: $base"
+
+  trimmomatic PE \
+    -threads 8 \
+    -phred33 \
+    "${base}_1.fastq.gz" \
+    "${base}_2.fastq.gz" \
+    "../TRIM_results/${base}_1_trimmed.fq.gz" \
+    "../TRIM_results/${base}_1_unpaired.fq.gz" \
+    "../TRIM_results/${base}_2_trimmed.fq.gz" \
+    "../TRIM_results/${base}_2_unpaired.fq.gz" \
+    ILLUMINACLIP:/ruta/a/TruSeq3-PE-2.fa:2:30:10 \
+    LEADING:3 \
+    TRAILING:3 \
+    SLIDINGWINDOW:4:20 \
+    MINLEN:80
+done
+```
+
+### Parámetros de Trimmomatic explicados
+
+El comando de Trimmomatic se divide en tres bloques: (1) el **modo y las opciones generales**, (2) los **archivos de entrada y salida** en un orden fijo, y (3) los **pasos de trimming**, que se ejecutan en el orden en que se escriben.
+
+#### Modo y opciones generales
+
+```
+trimmomatic PE -threads 8 -phred33 ...
+```
+
+- `PE` (*paired-end*): indica que trabajamos con lecturas pareadas (los archivos `_1` y `_2`). Si tuviéramos lecturas de un solo extremo usaríamos `SE` (*single-end*). El modo `PE` es el que permite detectar adaptadores por el método *palindrome* (ver abajo).
+- `-threads 8`: número de hilos (núcleos del procesador) que se usarán en paralelo. Más hilos = más rápido, pero no debe exceder los núcleos disponibles en tu máquina o servidor.
+- `-phred33`: indica cómo están codificadas las calidades en el FASTQ. Prácticamente todos los datos modernos de Illumina usan **Phred+33**. La codificación antigua `-phred64` casi ya no se ve, pero si las calidades se ven "raras" conviene revisarlo.
+
+#### Orden de los archivos (importante en modo PE)
+
+El orden de los archivos **no es arbitrario**: Trimmomatic espera primero los 2 archivos de entrada y luego los 4 de salida en este orden exacto:
+
+```
+<input_1> <input_2> \
+<output_1_paired> <output_1_unpaired> \
+<output_2_paired> <output_2_unpaired>
+```
+
+Los archivos `paired` (*trimmed*) contienen las lecturas cuyo par también sobrevivió al trimming; son los que usaremos para el alineamiento. Los `unpaired` contienen lecturas que quedaron "huérfanas" porque su par fue descartado.
+
+#### Paso 1 — ILLUMINACLIP (remoción de adaptadores)
+
+```
+ILLUMINACLIP:<adapters>:<seedMismatches>:<palindromeClipThreshold>:<simpleClipThreshold>
+```
+
+- `<adapters>`: ruta al archivo FASTA con las secuencias de adaptadores (p. ej. `TruSeq3-PE-2.fa` o `NexteraPE-PE.fa`). Debe corresponder al kit con el que se preparó la librería.
+- `seedMismatches`: número máximo de mismatches (bases que no coinciden) permitidos en la alineación inicial corta (*seed*) entre la lectura y el adaptador. Valores bajos (2) son más estrictos; valores altos son más permisivos.
+- `palindromeClipThreshold`: puntaje mínimo para detectar contaminación de adaptadores por el método *palindrome*, que aprovecha que en modo PE ambas lecturas de un par se solapan cuando el fragmento es corto. Es muy sensible; por eso el umbral es alto (30 ≈ ~50 bases de coincidencia).
+- `simpleClipThreshold`: puntaje mínimo para el método *simple*, que busca el adaptador directamente dentro de cada lectura por separado. Un valor de 10 equivale a ~17 bases de coincidencia.
+
+> En resumen: `ILLUMINACLIP:TruSeq3-PE-2.fa:2:30:10` significa "busca este adaptador permitiendo 2 mismatches, con umbral 30 para el modo palindrome y 10 para el modo simple".
+
+#### Pasos 2 a 5 — recorte por calidad y longitud
+
+Estos pasos se aplican en orden. **El orden importa**: por ejemplo, poner `MINLEN` al final asegura que se descarten las lecturas que quedaron demasiado cortas *después* de todos los recortes.
+
+```
+LEADING:3           # Recorta bases del INICIO de la lectura mientras su Q < 3
+TRAILING:3          # Recorta bases del FINAL de la lectura mientras su Q < 3
+SLIDINGWINDOW:4:20  # Ventana deslizante de 4 bases; recorta cuando el Q promedio < 20
+MINLEN:80           # Descarta la lectura completa si quedó con menos de 80 pb
+```
+
+- `LEADING:3` y `TRAILING:3`: eliminan bases de muy mala calidad (o bases `N` sin llamado, que tienen Q=2) que quedan en los extremos. Con Q<3 solo se quitan las bases prácticamente inservibles.
+- `SLIDINGWINDOW:4:20`: es el filtro de calidad principal. Desliza una ventana de **4 bases** a lo largo de la lectura y, en cuanto el **promedio de calidad cae por debajo de Q20**, corta la lectura desde ese punto hacia el final. Esto elimina las "colas" de baja calidad típicas del final de las lecturas de Illumina, sin cortar de más el resto.
+- `MINLEN:80`: tras todos los recortes anteriores, descarta cualquier lectura que haya quedado con **menos de 80 pb**. Las lecturas muy cortas alinean de forma ambigua y meten ruido, por eso se eliminan. Este umbral se ajusta según la longitud original de las lecturas (aquí, lecturas de 150 pb).
+
+---
+
+## 5. QC post-trimming
+
+Después de Trimmomatic, corremos FastQC y MultiQC de nuevo para verificar la mejora:
+
+```{bash}
+# FastQC a los archivos trimmed
+mkdir -p rna/quality2
+
+for file in rna/TRIM_results/*_trimmed.fq.gz; do
+  fastqc "$file" -o rna/quality2/
+done
+
+# MultiQC sobre los trimmed
+multiqc rna/quality2/ -o rna/quality2/
+
+# Con AI
+multiqc rna/quality2/ \
+  -o rna/quality2/ \
+  --ai-summary-full \
+  --ai-provider seqera
+```
+
+### ¿Qué debe mejorar?
+
+- **Adapter content:** Debe ser casi cero
+
+- **Per base sequence quality:** Las colas deben estar mejor
+
+- **Sequence length distribution:** Ahora habrá distribución de longitudes (normal)
+
+- El número de lecturas puede bajar ligeramente, es esperado
+
+---
+
+## Estado de la carpeta al final de esta clase
+
+```
+rna/
+├── data/
+│   ├── SRRxx_1.fastq.gz
+│   ├── SRRxx_2.fastq.gz
+│   └── ...
+├── quality1/
+│   ├── SRRxxx_1_fastqc.html
+│   ├── SRRxxx_1_fastqc.zip
+│   ├── multiqc_report.html
+│   └── ...
+├── quality2/
+│   ├── SRRxxx_1_trimmed.fq_fastqc.html
+│   ├── multiqc_report.html
+│   └── ...
+└── TRIM_results/
+    ├── SRRxxx_1_trimmed.fq.gz
+    ├── SRRxxx_1_unpaired.fq.gz
+    ├── SRRxxx_2_trimmed.fq.gz
+    └── ...
+```
+
+---
+
+## Recursos
+
+- [FastQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/)
+
+- [MultiQC](https://multiqc.info/)
+
+- [Manual de Trimmomatic (PDF)](http://www.usadellab.org/cms/uploads/supplementary/Trimmomatic/TrimmomaticManual_V0.32.pdf)
+
+- [Explicación del Phred score — Illumina](https://www.illumina.com/documents/products/technotes/technote_Q-Scores.pdf)

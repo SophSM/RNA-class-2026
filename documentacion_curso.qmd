@@ -1,0 +1,852 @@
+---
+title: "Análisis de bulk RNA-seq: De datos públicos a genes diferencialmente expresados"
+subtitle: "Documentación completa del curso"
+author: "Sofia Salazar"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    toc-title: "Contenido"
+    number-sections: true
+    code-fold: false
+    theme: cosmo
+    highlight-style: github
+    embed-resources: true
+execute:
+  eval: false
+  echo: true
+---
+
+# Descripción del curso
+
+Este curso de 5 sesiones (2 horas cada una) está diseñado para personas sin experiencia en bioinformática que deseen aprender a procesar y analizar datos de **bulk RNA-seq** públicos. Al finalizar el curso, el estudiante será capaz de:
+
+1. Buscar y seleccionar estudios de RNA-seq en repositorios públicos (GEO)
+2. Descargar y organizar datos crudos (archivos FASTQ)
+3. Evaluar la calidad de las lecturas y limpiarlas
+4. Alinear las lecturas al genoma de referencia y generar matrices de cuentas
+5. Importar los datos a R, visualizarlos y detectar/corregir batch effects
+6. Realizar análisis de expresión diferencial con DESeq2
+7. Exportar una lista de genes con log2FoldChange y p-valores
+
+---
+
+# Estructura del curso
+
+| Clase | Tema | Herramientas |
+|-------|------|-------------|
+| 1 | Obtención de datos públicos de GEO | GEO NCBI, EBI, wget |
+| 2 | Control de calidad de lecturas | FastQC, MultiQC, Trimmomatic |
+| 3 | Alineamiento y conteo | STAR |
+| 4 | Importación a R y visualización | DESeq2, ggplot2, sva, limma |
+| 5 | Expresión diferencial | DESeq2, apeglm |
+
+---
+
+# Pipeline general
+
+```
+Datos públicos (GEO/EBI)
+        ↓
+   Archivos FASTQ
+        ↓
+  FastQC + MultiQC  (control de calidad)
+        ↓
+    Trimmomatic     (limpieza de lecturas)
+        ↓
+  FastQC + MultiQC  (verificación post-trimming)
+        ↓
+  STAR: indexar genoma + alinear
+        ↓
+ReadsPerGene.out.tab (cuentas por gen)
+        ↓
+   R: importar cuentas + metadatos
+        ↓
+   PCA + heatmap    (exploración)
+        ↓
+  Batch correction  (si aplica)
+        ↓
+      DESeq2        (expresión diferencial)
+        ↓
+Lista de genes: log2FC + padj
+```
+
+---
+
+# Clase 1: Obtención de datos públicos de RNA-seq
+
+## GEO — Gene Expression Omnibus
+
+**GEO** es el repositorio público de datos genómicos de NCBI.
+URL: https://www.ncbi.nlm.nih.gov/geo/
+
+### Tipos de entradas en GEO
+
+| Tipo | Descripción |
+|------|-------------|
+| GSE  | Serie — experimento completo |
+| GSM  | Muestra individual |
+| GPL  | Plataforma de secuenciación |
+
+### Estrategia de búsqueda
+
+```
+"RNA-seq" AND "Homo sapiens" AND "COVID-19" AND "PBMC"
+"RNA-seq" AND "SARS-CoV-2" AND "blood" AND "convalescent"
+"bulk RNA-seq" AND "COVID-19" AND "acute"
+```
+
+Filtros recomendados:
+- Organism: Homo sapiens
+- Study type: Expression profiling by high throughput sequencing
+- Entry type: Series (GSE)
+
+## Estudios del curso
+
+En este curso analizamos la respuesta transcriptómica al SARS-CoV-2 en PBMCs humanas, comparando **pacientes con infección activa (acute)** vs **pacientes convalecientes**. Utilizamos dos estudios públicos compatibles en plataforma y tejido:
+
+| GSE | BioProject | Grupos comparados |
+|-----|-----------|-------------------|
+| **GSE166253** | PRJNA699856 | convalescent / retesting-positive (RTP → `acute`) |
+| **GSE202805** | PRJNA837285 | convalescent / acute |
+
+De cada estudio se seleccionaron 8 muestras para descargar (ver `scripts/download_fastq.sh`). El archivo `data/metadatos_curso.csv` (generado con `scripts/crear_metadatos_curso.R`) combina esas **16 muestras (8 por estudio)**:
+
+| Estudio | acute | convalescent |
+|---------|-------|--------------|
+| GSE166253 | 4 | 4 |
+| GSE202805 | 4 | 4 |
+
+## Criterios de selección de estudios
+
+- **Diseño experimental:** grupos claramente definidos (convalescent vs acute)
+- **Número de muestras:** ≥ 3 réplicas biológicas por grupo
+- **Raw data disponible:** archivos FASTQ en SRA/EBI
+- **Plataforma:** Illumina paired-end (ambos estudios: 150 pb)
+- **Tejido:** PBMCs de sangre periférica humana
+
+## Descarga de archivos FASTQ
+
+### Desde EBI (recomendada)
+
+1. Ir a https://www.ebi.ac.uk/
+2. Buscar el GSE ID o PRJNA ID
+3. Seleccionar **Nucleotide sequences**
+4. En la columna **Generated FASTQ files: FTP**, seleccionar muestras
+5. Click en **Get download script**
+
+```{bash}
+# Ejecutar el script descargado
+chmod +x downloads.sh
+./downloads.sh
+```
+
+La bandera `-nc` (no-clobber) evita redescargar archivos existentes.
+
+### Desde SRA toolkit
+
+```{bash}
+# Descargar con prefetch
+prefetch SRR12363092
+
+# Convertir a FASTQ
+fasterq-dump SRR12363092 --outdir ./data/
+```
+
+## Organización del proyecto
+
+```
+RNA_project/
+├── data/              # FASTQs crudos
+│   └── downloads.sh
+├── metadata/
+│   └── metadata.csv   # Información de las muestras
+├── quality1/          # FastQC pre-trimming
+├── quality2/          # FastQC post-trimming
+├── TRIM_results/      # FASTQs post-trimming
+├── STAR_index/        # Índice del genoma
+├── STAR_output/       # BAMs + matrices de cuentas
+├── counts/            # Matrices de cuentas finales
+└── scripts/           # Scripts utilizados
+```
+
+### Sobre los scripts de la carpeta `scripts/`
+
+Los archivos de la carpeta `scripts/` (por ejemplo `download.sbatch`, `qc.sbatch`, `trim.sbatch`, `index_genome.sbatch`, `align.sbatch`, `rna_environment.sh` y `crear_metadatos_curso.R`) son **los scripts que se usaron literalmente en el cluster** para procesar los datos de este curso. La mayoría son scripts de **SLURM** (`.sbatch`), pensados para enviarse con `sbatch nombre_del_script`.
+
+Se incluyen aquí **como ejemplo y referencia de uso**, no como scripts listos para correr tal cual: **debes personalizarlos según tu entorno**, en particular:
+
+- las **rutas** de entrada y salida (carpetas de `data/`, `STAR_index/`, `STAR_output/`, etc.), que están fijadas al sistema de archivos del cluster donde se ejecutaron;
+- los **módulos o ambientes de software** (`module load ...`, rutas de conda) según lo disponible en tu servidor;
+- los **parámetros de SLURM** (`#SBATCH`): partición, memoria, número de núcleos y tiempo, que dependen de la configuración de tu cluster.
+
+Tómalos como plantillas: la lógica del pipeline es la misma, pero las rutas y recursos hay que adaptarlos a tu máquina o cluster.
+
+### Archivo de metadatos del curso
+
+El archivo `data/metadatos_curso.csv` se genera con `scripts/crear_metadatos_curso.R` y tiene el formato:
+
+```
+sample_id,study,status,severity
+SRR13639990,GSE166253,convalescent,moderate
+SRR13639995,GSE166253,acute,moderate
+SRR19173191,GSE202805,convalescent,severe_and_icu
+SRR19173185,GSE202805,acute,severe_and_icu
+```
+
+- `sample_id`: identificador de corrida en SRA (columna `Run`)
+- `study`: accesión GEO del estudio de origen (también funciona como variable de batch)
+- `status`: grupo de comparación (`convalescent` o `acute`)
+- `severity`: severidad de la enfermedad al momento de la infección activa
+
+## Consejos para homologar lecturas entre estudios
+
+Si se combinan múltiples estudios, verificar:
+- Misma **plataforma** de secuenciación (Illumina)
+- Mismo **largo de lectura** (75, 100, 150 pb)
+- Mismo **protocolo** (paired-end, stranded vs unstranded)
+- Mismo **organismo y ensamblaje** del genoma (hg38, mm10)
+- Los **batch effects** entre estudios se corrigen en la clase 4
+
+---
+
+# Clase 2: Control de calidad (FastQC y Trimmomatic)
+
+## El formato FASTQ
+
+Cada lectura ocupa 4 líneas:
+
+```
+@SEQ_ID
+GATTTGGGGTTCAAAGCAGTATCGATCAAATAGTAAATCCATTTGTTCAACTCACAGTTT
++
+!''*((((***+))%%%++)(%%%%).1***-+*''))**55CCF>>>>>>CCCCCCC65
+```
+
+### El Phred Score
+
+$$Q = -10 \log_{10} P$$
+
+| Q | Probabilidad de error | Precisión |
+|---|-----------------------|-----------|
+| Q10 | 1 en 10 | 90% |
+| Q20 | 1 en 100 | 99% |
+| Q30 | 1 en 1,000 | 99.9% |
+| Q40 | 1 en 10,000 | 99.99% |
+
+Se recomienda Q ≥ 20, idealmente Q ≥ 30.
+
+## FastQC
+
+Instalar:
+```{bash}
+conda install -c bioconda fastqc
+```
+
+Correr:
+```{bash}
+mkdir -p RNA_project/quality1
+
+# Un archivo
+fastqc RNA_project/data/SRR12363092_1.fastq.gz -o RNA_project/quality1/
+
+# Loop para todos los archivos
+for file in RNA_project/data/*.fastq.gz; do
+  fastqc "$file" -o RNA_project/quality1/
+done
+```
+
+### Módulos clave del reporte
+
+| Módulo | Qué evalúa |
+|--------|------------|
+| Per base sequence quality | Calidad por posición |
+| Per sequence GC content | Distribución %GC |
+| Sequence duplication levels | Lecturas repetidas |
+| **Adapter content** | Presencia de adaptadores |
+
+## MultiQC
+
+```{bash}
+multiqc RNA_project/quality1/ -o RNA_project/quality1/
+```
+
+## Trimmomatic
+
+Instalar:
+```{bash}
+conda install -c bioconda trimmomatic
+```
+
+Descargar adaptadores:
+```{bash}
+wget https://raw.githubusercontent.com/timflutre/trimmomatic/master/adapters/TruSeq3-PE-2.fa
+```
+
+### Loop de trimming para todas las muestras
+
+```{bash}
+mkdir -p RNA_project/TRIM_results
+cd RNA_project/data/
+
+for i in *_1.fastq.gz; do
+  base="${i%_1.fastq.gz}"
+  echo "Procesando: $base"
+
+  trimmomatic PE \
+    -threads 8 \
+    -phred33 \
+    "${base}_1.fastq.gz" \
+    "${base}_2.fastq.gz" \
+    "../TRIM_results/${base}_1_trimmed.fq.gz" \
+    "../TRIM_results/${base}_1_unpaired.fq.gz" \
+    "../TRIM_results/${base}_2_trimmed.fq.gz" \
+    "../TRIM_results/${base}_2_unpaired.fq.gz" \
+    ILLUMINACLIP:/ruta/TruSeq3-PE-2.fa:2:30:10 \
+    LEADING:3 \
+    TRAILING:3 \
+    SLIDINGWINDOW:4:20 \
+    MINLEN:80
+done
+```
+
+### Parámetros de Trimmomatic
+
+| Parámetro | Descripción |
+|-----------|-------------|
+| `ILLUMINACLIP` | Remover adaptadores |
+| `LEADING:3` | Cortar bases Q < 3 al inicio |
+| `TRAILING:3` | Cortar bases Q < 3 al final |
+| `SLIDINGWINDOW:4:20` | Ventana de 4 bases, cortar si Q < 20 |
+| `MINLEN:80` | Descartar lecturas < 80 pb |
+
+## QC post-trimming
+
+```{bash}
+mkdir -p RNA_project/quality2
+
+for file in RNA_project/TRIM_results/*_trimmed.fq.gz; do
+  fastqc "$file" -o RNA_project/quality2/
+done
+
+multiqc RNA_project/quality2/ -o RNA_project/quality2/
+```
+
+---
+
+# Clase 3: Alineamiento con STAR
+
+## Tipos de estrategia de alineamiento
+
+| Tipo | Software | Ventajas |
+|------|----------|----------|
+| A genoma de referencia | **STAR**, HISAT2 | Detecta nuevos transcritos, maneja splicing |
+| A transcriptoma | Salmon, Kallisto | Muy rápido |
+| De novo | Trinity | Sin referencia, organismos no modelo |
+
+## Archivos necesarios
+
+### Genoma de referencia (FASTA)
+
+```{bash}
+# Genoma humano GRCh38 — GENCODE
+wget https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_44/GRCh38.p14.genome.fa.gz
+```
+
+### Archivo de anotación (GTF)
+
+```{bash}
+# Anotación humana — GENCODE
+wget https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_44/gencode.v44.primary_assembly.annotation.gtf.gz
+gunzip gencode.v44.primary_assembly.annotation.gtf.gz
+```
+
+**Regla:** Siempre usar la misma versión del genoma y la anotación.
+
+## STAR: Indexar el genoma
+
+```{bash}
+mkdir -p RNA_project/STAR_index
+
+STAR \
+  --runThreadN 12 \
+  --runMode genomeGenerate \
+  --genomeDir RNA_project/STAR_index \
+  --genomeFastaFiles /ruta/al/genoma.fa \
+  --sjdbGTFfile /ruta/al/anotacion.gtf \
+  --sjdbOverhang 149
+```
+
+`--sjdbOverhang` = longitud de lectura − 1 (lecturas de 150 pb → 149)
+
+Tiempo: ~30–60 min. RAM requerida: ~30 GB.
+
+## STAR: Alineamiento
+
+```{bash}
+INDEX=RNA_project/STAR_index
+TRIM_DIR=RNA_project/TRIM_results
+OUT_DIR=RNA_project/STAR_output
+
+mkdir -p $OUT_DIR
+
+for f in $TRIM_DIR/*_1_trimmed.fq.gz; do
+  base=$(basename "$f" _1_trimmed.fq.gz)
+
+  STAR \
+    --runThreadN 12 \
+    --genomeDir $INDEX \
+    --readFilesIn "$f" "$TRIM_DIR/${base}_2_trimmed.fq.gz" \
+    --outSAMtype BAM SortedByCoordinate \
+    --quantMode GeneCounts \
+    --readFilesCommand zcat \
+    --outFileNamePrefix "$OUT_DIR/${base}"
+done
+```
+
+## Archivos de salida de STAR
+
+| Archivo | Contenido |
+|---------|-----------|
+| `*Aligned.sortedByCoord.out.bam` | Lecturas alineadas |
+| `*Log.final.out` | Estadísticas de alineamiento |
+| **`*ReadsPerGene.out.tab`** | Matriz de cuentas por gen ← usamos este |
+| `*SJ.out.tab` | Splicing junctions |
+
+### Columnas del archivo de cuentas
+
+| Columna | Descripción |
+|---------|-------------|
+| 1 | Gene ID |
+| 2 | Cuentas unstranded ← usar por defecto |
+| 3 | Cuentas strand 1 |
+| 4 | Cuentas strand 2 (reverse) |
+
+### Estadísticas de alineamiento esperadas
+
+| Métrica | Valor esperado |
+|---------|---------------|
+| % uniquely mapped | > 70–80% |
+| % multi-mapped | < 20% |
+| % unmapped | < 10% |
+
+---
+
+# Clase 4: Importación a R, visualización y batch correction
+
+## Preparación del entorno en R
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(c("DESeq2", "sva", "limma", "pheatmap",
+                        "ggplot2", "RColorBrewer", "dplyr"))
+```
+
+```{r}
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(RColorBrewer)
+library(dplyr)
+library(sva)
+library(limma)
+```
+
+## Importar matrices de cuentas
+
+```{r}
+# Rutas relativas a la raíz del proyecto
+star_dir      <- "STAR_output"
+metadata_file <- "data/metadatos_curso.csv"
+
+files <- list.files(star_dir, pattern = "ReadsPerGene.out.tab$", full.names = TRUE)
+
+counts <- c()
+for (i in seq_along(files)) {
+  x <- read.table(file = files[i], sep = "\t", header = FALSE, as.is = TRUE)
+  counts <- cbind(counts, x[, 2])
+}
+
+# Eliminar filas de estadísticas globales
+counts <- counts[-c(1:4), ]
+x <- x[-c(1:4), ]
+
+counts <- as.data.frame(counts)
+rownames(counts) <- x[, 1]
+colnames(counts) <- sub("_ReadsPerGene.out.tab", "", basename(files))
+```
+
+## Cargar metadatos y crear DESeqDataSet
+
+```{r}
+metadata <- read.csv(metadata_file)
+rownames(metadata) <- metadata$sample_id
+
+# Ordenar los metadatos igual que las columnas de la matriz de cuentas
+# (las 16 muestras, 8 por estudio)
+metadata <- metadata[colnames(counts), ]
+
+# status = variable de interés (acute vs. convalescent); convalescent como referencia
+metadata$status <- relevel(factor(metadata$status), ref = "convalescent")
+# study = estudio de origen (GSE166253 / GSE202805), lo usamos como batch
+metadata$study <- factor(metadata$study)
+
+# Verificar orden de muestras
+all(colnames(counts) == rownames(metadata))
+
+# Crear objeto DESeqDataSet
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData   = metadata,
+  design    = ~ status
+)
+
+# Filtro de genes con pocas cuentas
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep, ]
+```
+
+## Transformación para visualización
+
+```{r}
+# VST — recomendado para n ≥ 30
+vsd <- vst(dds, blind = TRUE)
+
+# rlog — para n < 30
+rld <- rlog(dds, blind = TRUE)
+```
+
+## PCA
+
+```{r}
+# PCA básico
+plotPCA(vsd, intgroup = "status") + theme_bw()
+
+# PCA personalizado (color por grupo biológico y forma por estudio)
+pca_data <- plotPCA(vsd, intgroup = c("status", "study"), returnData = TRUE)
+percent_var <- round(100 * attr(pca_data, "percentVar"))
+
+ggplot(pca_data, aes(PC1, PC2, color = status, shape = study)) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", percent_var[1], "% varianza")) +
+  ylab(paste0("PC2: ", percent_var[2], "% varianza")) +
+  theme_bw()
+```
+
+## Heatmap de correlación entre muestras
+
+```{r}
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
+
+pheatmap(
+  sampleDistMatrix,
+  clustering_distance_rows = sampleDists,
+  clustering_distance_cols = sampleDists,
+  col = colors,
+  annotation_col = as.data.frame(colData(dds)[, c("status", "study"), drop = FALSE])
+)
+```
+
+## Batch effects
+
+Un **batch effect** es variación técnica no biológica causada por:
+- Procesamiento en días distintos
+- Diferentes corridas de secuenciación
+- Diferentes operadores o kits
+
+**Señal de alarma:** en el PCA, las muestras se separan por lote en lugar de por grupo biológico.
+
+### Estrategias de corrección
+
+| Situación | Estrategia |
+|-----------|-----------|
+| Batch conocido, bien balanceado | `design = ~ study + status` |
+| Batch conocido, desbalanceado | ComBat-seq |
+| Batch desconocido | SVA |
+
+### ComBat-seq (recomendada)
+
+```{r}
+library(sva)
+
+counts_corrected <- ComBat_seq(
+  counts = as.matrix(counts(dds)),
+  batch  = metadata$study,
+  group  = metadata$status
+)
+
+dds_corrected <- DESeqDataSetFromMatrix(
+  countData = counts_corrected,
+  colData   = metadata,
+  design    = ~ status
+)
+```
+
+### limma::removeBatchEffect (solo visualización)
+
+```{r}
+library(limma)
+
+vsd_corrected <- vsd
+assay(vsd_corrected) <- removeBatchEffect(
+  assay(vsd),
+  batch  = metadata$study,
+  design = model.matrix(~ status, data = metadata)
+)
+```
+
+### Batch en el modelo DESeq2
+
+```{r}
+design(dds) <- ~ study + status
+```
+
+---
+
+# Clase 5: Expresión diferencial con DESeq2
+
+## Correr DESeq2
+
+```{r}
+library(DESeq2)
+load("counts/dds.RData")
+
+dds <- DESeq(dds)
+```
+
+## Extraer resultados
+
+```{r}
+# Comparar acute vs convalescent (convalescent es la referencia)
+res <- results(
+  dds,
+  contrast = c("status", "acute", "convalescent"),
+  alpha = 0.05
+)
+
+summary(res)
+```
+
+### Shrinkage del log2FoldChange
+
+```{r}
+res_shrunk <- lfcShrink(
+  dds,
+  coef = "status_acute_vs_convalescent",
+  type = "apeglm"
+)
+```
+
+## Interpretar los resultados
+
+| Columna | Significado |
+|---------|-------------|
+| `baseMean` | Expresión promedio |
+| `log2FoldChange` | log2(acute/convalescent) |
+| `pvalue` | P-valor nominal |
+| `padj` | FDR (Benjamini-Hochberg) |
+
+### Interpretación del log2FoldChange
+
+| log2FC | Fold Change | Interpretación |
+|--------|-------------|----------------|
+| +2 | 4x | 4 veces más alto en agudo |
+| +1 | 2x | 2 veces más alto en agudo |
+| -1 | 0.5x | 2 veces más bajo en agudo |
+| -2 | 0.25x | 4 veces más bajo en agudo |
+
+### Filtrado de genes significativos
+
+```{r}
+res_df <- as.data.frame(res_shrunk) |>
+  mutate(
+    gene_id = rownames(res_shrunk),
+    significant = !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > 1,
+    direction = case_when(
+      significant & log2FoldChange > 0 ~ "Up",
+      significant & log2FoldChange < 0 ~ "Down",
+      TRUE ~ "NS"
+    )
+  )
+```
+
+**Umbrales estándar:**
+- `padj < 0.05` → 5% FDR
+- `|log2FoldChange| > 1` → al menos 2x de diferencia
+
+## Visualización de resultados
+
+### Volcano Plot
+
+```{r}
+library(ggrepel)
+
+top_genes <- res_df |> filter(significant) |>
+  slice_max(abs(log2FoldChange), n = 20)
+
+ggplot(res_df, aes(log2FoldChange, -log10(padj), color = direction)) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_text_repel(data = top_genes, aes(label = gene_id), size = 3) +
+  scale_color_manual(values = c("Up" = "#E41A1C", "Down" = "#377EB8", "NS" = "grey60")) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  labs(title = "Volcano plot", x = "log2 Fold Change", y = "-log10(FDR)") +
+  theme_bw()
+```
+
+### MA Plot
+
+```{r}
+plotMA(res_shrunk, ylim = c(-5, 5), alpha = 0.05)
+```
+
+### Heatmap de genes significativos
+
+```{r}
+sig_genes <- rownames(res_df[res_df$significant & !is.na(res_df$significant), ])
+vsd_final <- vst(dds, blind = FALSE)
+mat <- assay(vsd_final)[sig_genes, ]
+mat_scaled <- t(scale(t(mat)))
+
+pheatmap(
+  mat_scaled,
+  annotation_col = as.data.frame(colData(dds)[, c("status", "study"), drop = FALSE]),
+  color = colorRampPalette(c("#3B4CC0", "white", "#B40426"))(100),
+  main = "Genes diferencialmente expresados"
+)
+```
+
+## Exportar la lista de genes
+
+```{r}
+results_final <- res_df |>
+  filter(!is.na(padj)) |>
+  arrange(padj) |>
+  select(gene_id, baseMean, log2FoldChange, lfcSE, pvalue, padj, direction)
+
+# Todos los genes
+dir.create("results", showWarnings = FALSE)
+write.csv(results_final,
+          "results/resultados_acute_vs_convalescent.csv",
+          row.names = FALSE)
+
+# Solo significativos
+write.csv(results_final |> filter(direction != "NS"),
+          "results/DEGs_acute_vs_convalescent_sig.csv",
+          row.names = FALSE)
+```
+
+---
+
+# Referencia rápida de comandos
+
+## Bash
+
+```{bash}
+# FastQC
+for file in data/*.fastq.gz; do fastqc "$file" -o quality1/; done
+multiqc quality1/ -o quality1/
+
+# Trimmomatic (loop)
+for i in data/*_1.fastq.gz; do
+  base="${i%_1.fastq.gz}"
+  trimmomatic PE -threads 8 -phred33 \
+    "${base}_1.fastq.gz" "${base}_2.fastq.gz" \
+    "TRIM_results/${base}_1_trimmed.fq.gz" \
+    "TRIM_results/${base}_1_unpaired.fq.gz" \
+    "TRIM_results/${base}_2_trimmed.fq.gz" \
+    "TRIM_results/${base}_2_unpaired.fq.gz" \
+    ILLUMINACLIP:TruSeq3-PE-2.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:20 MINLEN:80
+done
+
+# STAR — indexar
+STAR --runThreadN 12 --runMode genomeGenerate \
+  --genomeDir STAR_index \
+  --genomeFastaFiles genoma.fa --sjdbGTFfile anotacion.gtf --sjdbOverhang 149
+
+# STAR — alinear
+for f in TRIM_results/*_1_trimmed.fq.gz; do
+  base=$(basename "$f" _1_trimmed.fq.gz)
+  STAR --runThreadN 12 --genomeDir STAR_index \
+    --readFilesIn "$f" "TRIM_results/${base}_2_trimmed.fq.gz" \
+    --outSAMtype BAM SortedByCoordinate --quantMode GeneCounts \
+    --readFilesCommand zcat --outFileNamePrefix "STAR_output/${base}"
+done
+```
+
+## R
+
+```{r}
+# Importar cuentas
+files <- dir(pattern = "ReadsPerGene.out.tab")
+counts <- c()
+for (i in seq_along(files)) {
+  x <- read.table(files[i], sep = "\t", header = FALSE, as.is = TRUE)
+  counts <- cbind(counts, x[, 2])
+}
+counts <- counts[-c(1:4), ]
+x <- x[-c(1:4), ]
+counts <- as.data.frame(counts)
+rownames(counts) <- x[, 1]
+colnames(counts) <- sub("_ReadsPerGene.out.tab", "", files)
+
+# DESeqDataSet
+dds <- DESeqDataSetFromMatrix(counts, metadata, ~ status)
+dds <- dds[rowSums(counts(dds)) >= 10, ]
+
+# Exploración
+vsd <- vst(dds, blind = TRUE)
+plotPCA(vsd, intgroup = "status")
+
+# Batch correction (study = estudio de origen)
+counts_corr <- ComBat_seq(as.matrix(counts(dds)), batch = metadata$study, group = metadata$status)
+
+# DESeq2
+dds <- DESeq(dds)
+res <- results(dds, contrast = c("status", "acute", "convalescent"), alpha = 0.05)
+res_shrunk <- lfcShrink(dds, coef = "status_acute_vs_convalescent", type = "apeglm")
+
+# Exportar
+write.csv(as.data.frame(res_shrunk), "results/resultados_acute_vs_convalescent.csv")
+```
+
+---
+
+# Recursos y referencias
+
+## Software
+
+| Herramienta | URL |
+|-------------|-----|
+| FastQC | https://www.bioinformatics.babraham.ac.uk/projects/fastqc/ |
+| MultiQC | https://multiqc.info/ |
+| Trimmomatic | http://www.usadellab.org/cms/?page=trimmomatic |
+| STAR | https://github.com/alexdobin/STAR |
+| DESeq2 | https://bioconductor.org/packages/DESeq2 |
+| sva (ComBat-seq) | https://bioconductor.org/packages/sva |
+| limma | https://bioconductor.org/packages/limma |
+
+## Bases de datos
+
+| Base de datos | URL |
+|--------------|-----|
+| GEO NCBI | https://www.ncbi.nlm.nih.gov/geo/ |
+| EBI SRA | https://www.ebi.ac.uk/ena/browser/home |
+| GENCODE | https://www.gencodegenes.org/ |
+| UCSC Genome Browser | https://genome.ucsc.edu/ |
+| Ensembl | https://www.ensembl.org/ |
+
+## Papers de referencia
+
+- Love MI, Huber W, Anders S. **Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2.** *Genome Biology.* 2014. https://doi.org/10.1186/s13059-014-0550-8
+
+- Dobin A, et al. **STAR: ultrafast universal RNA-seq aligner.** *Bioinformatics.* 2013. https://doi.org/10.1093/bioinformatics/bts635
+
+- Zhang Y, et al. **ComBat-seq: batch effect adjustment for RNA-seq count data.** *NAR Genomics and Bioinformatics.* 2020. https://doi.org/10.1093/nargab/lqaa078
+
+- Andrews S. **FastQC: A quality control tool for high throughput sequence data.** 2010. http://www.bioinformatics.babraham.ac.uk/projects/fastqc/

@@ -1,0 +1,383 @@
+---
+title: "Clase 5: Expresión diferencial con DESeq2"
+subtitle: "Curso: Análisis de bulk RNA-seq"
+author: "Sofia Salazar"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    theme: cosmo
+execute:
+  eval: false
+  echo: true
+---
+
+## Objetivos de la clase
+
+Al finalizar esta sesión podrás:
+
+- Entender el modelo estadístico de DESeq2
+
+- Correr un análisis completo de expresión diferencial
+
+- Interpretar los resultados: log2FoldChange, p-valor y FDR
+
+- Manejar correctamente la corrección de batch en DESeq2
+
+- Visualizar resultados con volcano plots, MA plots y heatmaps
+
+- Exportar la lista final de genes diferencialmente expresados
+
+---
+
+## 1. ¿Por qué DESeq2?
+
+**DESeq2** es el estándar de la industria para análisis de expresión diferencial en RNA-seq porque:
+
+- Modela correctamente la distribución de los datos de RNA-seq (binomial negativa)
+
+- Normaliza automáticamente usando factores de tamaño de librería
+
+- Aplica shrinkage (contracción) del log2FoldChange para estimaciones más estables
+
+- Es robusto con pocas réplicas biológicas
+
+---
+
+## 2. El modelo estadístico de DESeq2
+
+Para cada gen $i$ y muestra $j$, DESeq2 asume:
+
+$$K_{ij} \sim \text{NegativeBinomial}(\mu_{ij}, \alpha_i)$$
+
+donde:
+- $\mu_{ij}$ = media esperada de lecturas
+
+- $\alpha_i$ = parámetro de dispersión del gen
+
+La media se modela como:
+
+$$\mu_{ij} = s_j \cdot q_{ij}$$
+
+donde $s_j$ es el factor de tamaño de la muestra $j$ y $q_{ij}$ es la expresión normalizada.
+
+### Normalización por DESeq2
+
+DESeq2 estima **factores de tamaño de librería** para corregir diferencias en la profundidad de secuenciación entre muestras:
+
+```{r}
+# Ver los factores de tamaño estimados
+sizeFactors(dds)
+```
+
+Las cuentas crudas de cada muestra se dividen por su factor de tamaño. Entonces si la muestra A tiene un factor de tamaño de 2, sus cuentas crudas se dividen entre 2 para traerlo a la misma escala que las demás muestras.
+
+---
+
+## 3. Cargar datos de la clase anterior
+
+```{r}
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(dplyr)
+library(ggrepel)
+
+# Cargar el objeto dds de la clase 4 (ejecuta desde la raíz del proyecto)
+load("counts/dds.RData")
+```
+
+---
+
+## 4. Correr DESeq2
+
+### Sin corrección de batch
+
+```{r}
+# Diseño simple: solo la variable de interés
+design(dds) <- ~ status
+
+# Correr DESeq2 (estima dispersión + prueba estadística)
+dds <- DESeq(dds)
+```
+
+### Con batch en el modelo
+
+```{r}
+# Incluir el estudio de origen (batch) en el modelo — ANTES de la variable de interés
+design(dds) <- ~ study + status
+dds <- DESeq(dds)
+```
+
+```{r}
+# Con ComBat-seq (cuentas ya corregidas, sin batch en el diseño)
+# Si usamos ComBat-seq en la clase 4, el objeto dds_corrected ya tiene las
+# cuentas corregidas y solo necesitamos status en el diseño
+design(dds_corrected) <- ~ status
+dds_corrected <- DESeq(dds_corrected)
+```
+
+---
+
+## 5. Extraer los resultados
+
+```{r}
+# Extraer resultados comparando acute vs convalescent
+# El segundo nivel es la referencia (denominador)
+res <- results(
+  dds,
+  contrast = c("status", "acute", "convalescent"),
+  alpha = 0.05   # umbral de FDR
+)
+
+summary(res)
+```
+
+```
+out of 18000 with nonzero total read count
+adjusted p-value < 0.05
+LFC > 0 (up)       : 345, 1.9%
+LFC < 0 (down)     : 289, 1.6%
+outliers [1]       : 12, 0.07%
+low counts [2]     : 2100, 12%
+```
+
+### Shrinkage del log2FoldChange
+
+El shrinkage reduce el ruido en genes con pocas lecturas (estimaciones más conservadoras y estables):
+
+```{r}
+# Aplicar shrinkage (recomendado para visualización y ranking)
+res_shrunk <- lfcShrink(
+  dds,
+  coef = "status_acute_vs_convalescent",
+  type = "apeglm"   # método recomendado
+)
+
+summary(res_shrunk)
+```
+
+---
+
+## 6. Interpretar los resultados
+
+```{r}
+# Ver las columnas del resultado
+head(as.data.frame(res_shrunk), 3)
+```
+
+| Columna | Significado |
+|---------|-------------|
+| `baseMean` | Promedio de cuentas normalizadas en todas las muestras |
+| `log2FoldChange` | log2(acute/convalescent) — positivo = más alto en agudo |
+| `lfcSE` | Error estándar del log2FoldChange |
+| `stat` | Estadístico de la prueba de Wald |
+| `pvalue` | P-valor nominal |
+| `padj` | P-valor ajustado por múltiples pruebas (FDR — Benjamini-Hochberg) |
+
+### Umbrales típicos
+
+```{r}
+# Criterios de significancia
+# |log2FC| > 1 = al menos 2 veces de diferencia
+# padj < 0.05 = 5% de tasa de falsos descubrimientos
+
+res_df <- as.data.frame(res_shrunk) |>
+  mutate(
+    gene_id = rownames(res_shrunk),
+    significant = !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > 1,
+    direction = case_when(
+      significant & log2FoldChange > 0 ~ "Up",
+      significant & log2FoldChange < 0 ~ "Down",
+      TRUE ~ "NS"
+    )
+  )
+
+table(res_df$direction)
+```
+
+---
+
+## 7. Visualización de resultados
+
+### Volcano Plot
+
+```{r}
+# Seleccionar top genes para etiquetar
+top_genes <- res_df |>
+  filter(significant) |>
+  slice_max(abs(log2FoldChange), n = 20)
+
+ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj), color = direction)) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_text_repel(data = top_genes,
+                   aes(label = gene_id),
+                   size = 3, max.overlaps = 15) +
+  scale_color_manual(values = c("Up" = "#E41A1C",
+                                 "Down" = "#377EB8",
+                                 "NS" = "grey60")) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  labs(title = "Volcano plot: Agudo vs. Convaleciente",
+       x = "log2 Fold Change",
+       y = "-log10(FDR)",
+       color = "Dirección") +
+  theme_bw()
+```
+
+### MA Plot
+
+```{r}
+# MA plot: muestra la relación entre expresión media y fold change
+plotMA(res_shrunk,
+       ylim = c(-5, 5),
+       alpha = 0.05,
+       main = "MA plot: Agudo vs. Convaleciente")
+```
+
+### Heatmap de genes significativos
+
+```{r}
+library(pheatmap)
+
+# Genes significativos
+sig_genes <- rownames(res_df[res_df$significant & !is.na(res_df$significant), ])
+
+# Normalización VST para el heatmap
+vsd <- vst(dds, blind = FALSE)
+
+# Extraer la matriz de expresión de los genes significativos
+mat <- assay(vsd)[sig_genes, ]
+
+# Centrar por fila (z-score)
+mat_scaled <- t(scale(t(mat)))
+
+# Anotaciones de columnas
+annotation_col <- as.data.frame(colData(dds)[, c("status", "study"), drop = FALSE])
+
+pheatmap(
+  mat_scaled,
+  annotation_col = annotation_col,
+  show_rownames = nrow(mat_scaled) < 50,   # solo si hay pocos genes
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  color = colorRampPalette(c("#3B4CC0", "white", "#B40426"))(100),
+  main = "Genes diferencialmente expresados"
+)
+```
+
+---
+
+## 8. Retomar: batch correction en DESeq2
+
+### ¿Cuándo usar cada estrategia?
+
+| Situación | Estrategia recomendada |
+|-----------|----------------------|
+| Batch conocido, bien balanceado | `design = ~ study + status` |
+| Batch conocido, desbalanceado | ComBat-seq antes de DESeq2 |
+| Batch desconocido | SVA (surrogate variable analysis) |
+
+### Con ComBat-seq (cuentas corregidas)
+
+```{r}
+# Si usaste ComBat-seq en la clase 4
+dds_cb <- DESeqDataSetFromMatrix(
+  countData = counts_corrected,  # cuentas corregidas por ComBat-seq
+  colData   = metadata,
+  design    = ~ status           # SIN batch en el diseño (ya fue corregido)
+)
+
+dds_cb <- DESeq(dds_cb)
+
+res_cb <- results(dds_cb,
+                   contrast = c("status", "acute", "convalescent"),
+                   alpha = 0.05)
+```
+
+### Con SVA (batch desconocido)
+
+Con SVA podemos inferir los batch effects si se sospecha de alguno pero no se tienen los metadatos. Sin embargo esto tiende a sobrecorregir y eliminar efectos que tal vez sí son interesantes para el estudio.
+ 
+```{r}
+library(sva)
+
+# Estimar surrogate variables
+dat <- counts(dds, normalized = TRUE)
+mod <- model.matrix(~ status, data = colData(dds))
+mod0 <- model.matrix(~ 1, data = colData(dds))
+
+svseq <- svaseq(counts(dds), mod, mod0)
+n_sv <- svseq$n.sv
+
+# Agregar SVs a los metadatos
+colData(dds)$SV1 <- svseq$sv[, 1]
+if (n_sv > 1) colData(dds)$SV2 <- svseq$sv[, 2]
+
+# Incluir SVs en el diseño
+if (n_sv >= 2) {
+  design(dds) <- ~ SV1 + SV2 + status
+} else if (n_sv == 1) {
+  design(dds) <- ~ SV1 + status
+}
+
+dds <- DESeq(dds)
+```
+
+---
+
+## 9. Exportar la lista de genes
+
+```{r}
+# Filtrar genes significativos y ordenar por padj
+results_final <- res_df |>
+  filter(!is.na(padj)) |>
+  arrange(padj) |>
+  select(gene_id, baseMean, log2FoldChange, lfcSE, pvalue, padj, direction)
+
+# Ver los top 20
+head(results_final, 20)
+
+# Guardar todos los genes (con y sin significancia) en la carpeta results/
+dir.create("results", showWarnings = FALSE)
+write.csv(results_final,
+          file = "results/resultados_acute_vs_convalescent.csv",
+          row.names = FALSE)
+
+# Guardar solo los genes significativos
+write.csv(results_final |> filter(significant == TRUE),
+          file = "results/DEGs_acute_vs_convalescent_sig.csv",
+          row.names = FALSE)
+```
+
+---
+
+## 10. Lista final de genes
+
+El archivo de resultados tiene el siguiente formato:
+
+```
+gene_id             baseMean  log2FoldChange  lfcSE    pvalue      padj       direction
+ENSG00000000003.15  1823.4    2.34            0.18     1.2e-25    3.4e-22    Up
+ENSG00000000419.12  456.7    -1.89            0.22     5.6e-18    8.1e-15    Down
+...
+```
+
+**Interpretación:**
+- `log2FoldChange = 2.34` → el gen está ~5x más expresado en agudo vs. convaleciente
+- `log2FoldChange = -1.89` → el gen está ~3.7x menos expresado en agudo
+- `padj < 0.05` → significativo después de corrección por múltiples pruebas
+
+---
+
+## Recursos
+
+- [DESeq2 vignette completo](https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html)
+
+- [Love et al. 2014 — paper de DESeq2](https://doi.org/10.1186/s13059-014-0550-8)
+
+- [apeglm shrinkage](https://bioconductor.org/packages/release/bioc/html/apeglm.html)
+
+- [SVA — surrogate variable analysis](https://bioconductor.org/packages/release/bioc/html/sva.html)

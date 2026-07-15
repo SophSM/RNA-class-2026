@@ -1,0 +1,369 @@
+---
+title: "Clase 4: Importación a R, visualización y batch correction"
+subtitle: "Curso: Análisis de bulk RNA-seq"
+author: "Sofia Salazar"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    theme: cosmo
+execute:
+  eval: false
+  echo: true
+---
+
+## Objetivos de la clase
+
+Al finalizar esta sesión podrás:
+
+- Importar las matrices de cuentas de STAR a R
+- Construir un objeto DESeqDataSet
+- Hacer exploración visual de los datos con PCA y heatmaps
+- Entender qué son los efectos de lote (batch effects)
+- Detectar batch effects en tus datos
+- Aplicar corrección de batch con ComBat-seq o limma
+
+---
+
+## 1. Preparación del entorno en R
+
+```{r}
+# Instalar paquetes si no los tienes
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(c("DESeq2", "sva", "limma", "pheatmap", "ggplot2",
+                        "RColorBrewer", "dplyr"))
+```
+
+```{r}
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(RColorBrewer)
+library(dplyr)
+library(sva)      # Para ComBat-seq
+library(limma)    # Para removeBatchEffect
+```
+
+---
+
+## 2. Importar las matrices de cuentas a R
+
+STAR genera un archivo `ReadsPerGene.out.tab` por muestra. Necesitamos consolidarlos en una sola matriz donde:
+- **Filas** = genes
+- **Columnas** = muestras
+
+### Leer todos los archivos de cuentas
+
+```{r}
+# Rutas del proyecto (ejecuta desde la raíz del proyecto)
+star_dir      <- "STAR_output"
+metadata_file <- "data/metadatos_curso.csv"
+
+# Listar los archivos de cuentas que están dentro de STAR_output
+files <- list.files(star_dir, pattern = "ReadsPerGene.out.tab$", full.names = TRUE)
+files
+```
+
+```{r}
+# Construir la matriz de cuentas
+# Usamos la columna 2 (unstranded) — cambia a 4 si es stranded reverse
+counts <- c()
+
+for (i in seq_along(files)) {
+  x <- read.table(file = files[i], sep = "\t", header = FALSE, as.is = TRUE)
+  counts <- cbind(counts, x[, 2])
+}
+
+# Guardamos x como referencia para los nombres de genes
+# x tiene los gene IDs en la columna 1
+```
+
+```{r}
+# Limpiar la matriz: eliminar las 4 primeras filas (estadísticas globales)
+counts <- counts[-c(1:4), ]
+x <- x[-c(1:4), ]
+
+# Asignar nombres de genes (filas) y muestras (columnas)
+counts <- as.data.frame(counts)
+rownames(counts) <- x[, 1]
+colnames(counts) <- sub("_ReadsPerGene.out.tab", "", basename(files))
+
+dim(counts)
+head(counts, 3)
+```
+
+### Cargar metadatos
+
+```{r}
+metadata <- read.csv(metadata_file, header = TRUE)
+rownames(metadata) <- metadata$sample_id
+
+# Ordenar los metadatos igual que las columnas de la matriz de cuentas
+# (deben quedar las 16 muestras, 8 por estudio)
+metadata <- metadata[colnames(counts), ]
+
+# status es la variable biológica de interés (acute vs. convalescent).
+# Fijamos convalescent como nivel de referencia (denominador de las comparaciones)
+metadata$status <- relevel(factor(metadata$status), ref = "convalescent")
+
+# study es el estudio de origen (GSE166253 / GSE202805); lo usaremos como batch
+metadata$study <- factor(metadata$study)
+
+# Verificar que el orden de las muestras coincida
+all(colnames(counts) == rownames(metadata))
+
+head(metadata)
+```
+
+---
+
+## 3. Crear un objeto DESeqDataSet
+
+**DESeq2** trabaja con un objeto especial llamado `DESeqDataSet` (dds) que contiene:
+- La matriz de cuentas (crudas, enteros)
+- Los metadatos de las muestras
+- El diseño experimental (fórmula)
+
+```{r}
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,      # Matriz de cuentas (enteros)
+  colData   = metadata,    # Metadatos
+  design    = ~ status     # Fórmula: variable de interés (acute vs. convalescent)
+)
+
+dds
+```
+
+### Filtro de genes con muy pocas cuentas
+
+```{r}
+# Eliminar genes con cuentas totales muy bajas (< 10 lecturas en total)
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep, ]
+
+dim(dds)
+```
+
+---
+
+## 4. Normalización y transformación para exploración
+
+DESeq2 usa cuentas **crudas** para el análisis diferencial, pero para visualización necesitamos datos normalizados.
+
+### VST (Variance Stabilizing Transformation)
+
+```{r}
+# Transformación estabilizadora de varianza, buena para visualización
+vsd <- vst(dds, blind = TRUE)
+
+# blind = TRUE: no usa el diseño experimental en la transformación
+# (bueno para exploración sin sesgar por grupo)
+```
+
+### rlog (Regularized log transformation)
+
+```{r}
+# Alternativa a VST, mejor para datos con pocas muestras (<30)
+rld <- rlog(dds, blind = TRUE)
+```
+
+---
+
+## 5. Análisis de componentes principales (PCA)
+
+El PCA nos muestra la variabilidad global de los datos. Nos ayuda a ver:
+
+- Si las muestras se agrupan según el grupo biológico (acute vs. convalescent), buena señal
+
+- Si las muestras se agrupan por otro factor (estudio de origen, sexo, etc.), posible batch effect
+
+```{r}
+# PCA con DESeq2 (función rápida)
+plotPCA(vsd, intgroup = "status") +
+  theme_bw() +
+  ggtitle("PCA: Agudo vs. Convaleciente")
+```
+
+```{r}
+# PCA personalizado con ggplot2
+# Coloreamos por grupo biológico (status) y usamos la forma para el estudio (study)
+pca_data <- plotPCA(vsd, intgroup = c("status", "study"), returnData = TRUE)
+percent_var <- round(100 * attr(pca_data, "percentVar"))
+
+ggplot(pca_data, aes(x = PC1, y = PC2, color = status, shape = study)) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", percent_var[1], "% varianza")) +
+  ylab(paste0("PC2: ", percent_var[2], "% varianza")) +
+  theme_bw() +
+  ggtitle("PCA de muestras de RNA-seq")
+```
+
+---
+
+## 6. Heatmap de correlación entre muestras
+
+```{r}
+# Calcular matriz de correlación entre muestras
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+
+# Definir colores
+colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
+
+# Heatmap
+pheatmap(
+  sampleDistMatrix,
+  clustering_distance_rows = sampleDists,
+  clustering_distance_cols = sampleDists,
+  col = colors,
+  annotation_col = as.data.frame(colData(dds)[, c("status", "study"), drop = FALSE]),
+  main = "Distancias entre muestras"
+)
+```
+
+---
+
+## 7. ¿Qué es un efecto de lote (batch effect)?
+
+Un **batch effect** es la variación técnica no biológica que puede surgir cuando:
+
+- Las muestras se procesaron en **días distintos**
+
+- Las muestras fueron **secuenciadas en diferentes corridas**
+
+- Diferentes **operadores** prepararon las muestras
+
+- Se usaron **diferentes versiones** del kit de secuenciación
+
+### ¿Por qué importa?
+
+Si el batch effect no se corrige, puede confundirse con la señal biológica real y generar falsos positivos/negativos en el análisis diferencial.
+
+### Ejemplo de batch effect en PCA
+
+En este curso el batch más evidente es el **estudio de origen** (`study`): GSE166253 y GSE202805 se secuenciaron en laboratorios y corridas distintas. Si en el PCA las muestras se separan por **estudio** en lugar de por **grupo biológico**, eso indica un batch effect:
+
+```
+PC1 (30% var): Separación por STUDY (técnico) ← problema
+PC2 (15% var): Separación por STATUS (biológico)
+```
+
+Lo ideal es que la separación por STATUS (agudo vs. convaleciente) sea la principal fuente de variación.
+
+---
+
+## 8. Detección de batch effects
+
+### Revisar el PCA coloreado por batch
+
+```{r}
+# El estudio de origen (study) es nuestra variable de batch conocida
+plotPCA(vsd, intgroup = "study") +
+  theme_bw() +
+  ggtitle("PCA: coloreado por estudio (batch)")
+```
+
+### Prueba estadística con `sva::svaseq`
+
+```{r}
+# SVA detecta variables de confusión no observadas (surrogate variables)
+dat <- assay(vsd)
+mod <- model.matrix(~ status, data = colData(dds))   # modelo completo
+mod0 <- model.matrix(~ 1, data = colData(dds))       # modelo nulo
+
+svseq <- svaseq(counts(dds), mod, mod0)
+svseq$n.sv  # número de surrogate variables detectadas
+```
+
+---
+
+## 9. Corrección de batch effects
+
+### Opción A: ComBat-seq (para cuentas crudas)
+
+ComBat-seq trabaja con cuentas **crudas** (enteros), lo que permite usar los datos corregidos directamente en DESeq2.
+
+```{r}
+library(sva)
+
+# batch debe ser un vector con el lote de cada muestra: aquí, el estudio de origen
+batch <- metadata$study
+
+# Corrección con ComBat-seq
+counts_corrected <- ComBat_seq(
+  counts = as.matrix(counts(dds)),
+  batch = batch,
+  group = metadata$status   # variable biológica de interés
+)
+
+# Crear nuevo objeto DESeqDataSet con cuentas corregidas
+dds_corrected <- DESeqDataSetFromMatrix(
+  countData = counts_corrected,
+  colData   = metadata,
+  design    = ~ status
+)
+```
+
+### Opción B: limma::removeBatchEffect (para datos transformados)
+
+Esta opción se usa **solo para visualización** (PCA, heatmaps), NO para análisis diferencial.
+
+```{r}
+library(limma)
+
+# Corrección en datos VST (para visualización)
+vsd_corrected <- vsd
+assay(vsd_corrected) <- removeBatchEffect(
+  assay(vsd),
+  batch = metadata$study,
+  design = model.matrix(~ status, data = metadata)
+)
+
+# Visualizar PCA corregido
+plotPCA(vsd_corrected, intgroup = "status") +
+  theme_bw() +
+  ggtitle("PCA post-corrección de batch")
+```
+
+### Opción C: Incluir batch en el modelo de DESeq2
+
+Si el batch está bien balanceado (hay muestras de todos los grupos en cada batch), se puede incluir en el modelo:
+
+```{r}
+# En el diseño del DESeqDataSet
+dds_batch <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData   = metadata,
+  design    = ~ study + status   # el batch (study) antes de la variable de interés
+)
+```
+
+---
+
+## Guardar los datos
+
+```{r}
+# Guardar matriz de cuentas (en la carpeta counts/ de la raíz del proyecto)
+dir.create("counts", showWarnings = FALSE)
+save(counts, file = "counts/raw_counts.RData")
+write.csv(counts, file = "counts/raw_counts.csv")
+
+# Guardar objeto dds (lo usaremos en la clase 5)
+save(dds, file = "counts/dds.RData")
+```
+
+---
+
+## Recursos
+
+- [DESeq2 vignette](https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html)
+
+- [ComBat-seq — sva package](https://bioconductor.org/packages/release/bioc/html/sva.html)
+
+- [limma removeBatchEffect](https://rdrr.io/bioc/limma/man/removeBatchEffect.html)
+
+- [Revisión de batch effects en RNA-seq](https://doi.org/10.1186/s12859-016-1270-8)

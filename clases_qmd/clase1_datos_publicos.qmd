@@ -1,0 +1,296 @@
+---
+title: "Clase 1: Obtención de datos públicos de RNA-seq"
+subtitle: "Curso: Análisis de bulk RNA-seq"
+author: "Sofia Salazar"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    theme: cosmo
+execute:
+  eval: false
+  echo: true
+---
+
+## Objetivos de la clase
+
+Al finalizar esta sesión podrás:
+
+- Navegar el repositorio GEO (Gene Expression Omnibus) de NCBI
+
+- Identificar y seleccionar estudios de RNA-seq con un diseño específico
+
+- Descargar archivos FASTQ crudos desde EBI o SRA
+
+- Organizar un proyecto de análisis de RNA-seq
+
+---
+
+## 1. ¿Qué es RNA-seq?
+
+RNA-seq (RNA sequencing) es una tecnología de secuenciación de alto rendimiento que permite cuantificar la expresión génica en una muestra biológica.
+
+En un experimento de **bulk RNA-seq**:
+
+1. Se extrae RNA total de células o tejido
+2. Se convierte a cDNA
+3. Se secuencia en un instrumento Illumina (u otro)
+4. Los resultados son millones de lecturas cortas de 75–150 pb
+
+### Pipeline general
+
+```
+Extracción de RNA
+       ↓
+Secuenciación (archivos FASTQ)
+       ↓
+Control de calidad de las lecturas
+       ↓
+Alineamiento al genoma de referencia
+       ↓
+Conteo de lecturas por gen
+       ↓
+Análisis de expresión diferencial
+       ↓
+Lista de genes con log2FC y p-valores
+```
+
+---
+
+## 2. ¿Qué es GEO?
+
+**GEO (Gene Expression Omnibus)** es un repositorio público de datos genómicos, alojado por NCBI. Contiene datos de experimentos de:
+
+- Microarreglos
+- RNA-seq (bulk y single-cell)
+- ChIP-seq
+- ATAC-seq
+- y muchos más
+
+**URL:** https://www.ncbi.nlm.nih.gov/geo/
+
+### Tipos de entradas en GEO
+
+| Tipo | Descripción | Ejemplo |
+|------|-------------|---------|
+| **GSE** | Serie — el experimento completo | GSE166253 |
+| **GSM** | Muestra individual | GSM4705616 |
+| **GPL** | Plataforma de secuenciación | GPL24676 |
+
+---
+
+## 3. Cómo buscar estudios en GEO
+
+### Estrategia de búsqueda
+
+En el buscador de GEO podemos usar términos como:
+
+```
+"RNA-seq" AND "Homo sapiens" AND "COVID-19" AND "PBMC"
+"RNA-seq" AND "SARS-CoV-2" AND "blood" AND "convalescent"
+"bulk RNA-seq" AND "COVID-19" AND "acute"
+```
+
+Es importante pensar en qué comparación queremos realizar en nuestra expresión diferencial (e.g controles vs pacientes) o (tratados vs no tratados), ya que de eso dependerán los estudios que escogamos para el análisis.
+
+### Filtros útiles
+
+- **Organism:** Homo sapiens, Mus musculus, etc.
+- **Study type:** Expression profiling by high throughput sequencing
+- **Entry type:** Series (GSE)
+
+### Ejercicio: Buscar un estudio en GEO
+
+1. Ve a https://www.ncbi.nlm.nih.gov/geo/
+2. En el buscador escribe: `COVID-19 RNA-seq PBMC`
+3. Filtra por: Organism = Homo sapiens, Entry type = Series, Study type = Expression profiling by high throughput sequencing
+4. Explora los resultados
+
+---
+
+## 4. Cómo evaluar un estudio
+
+Cuando encuentras un estudio (GSE), debes revisar:
+
+### Criterios de selección
+
+- **Diseño experimental:** ¿Tiene las condiciones a comparar (e.g casos y controles) claramente definidos?
+- **Número de muestras:** Mínimo 3 réplicas biológicas por grupo
+- **Organismo y tejido:** ¿Es relevante para tu pregunta?
+- **Tipo de datos:** ¿Tiene raw data (FASTQ) disponible?
+- **Plataforma:** ¿Con qué instrumento fue secuenciado? ¿Es paired-end?
+
+### Información a buscar en la página del GSE
+
+```
+Title: nombre del estudio
+Status: Public on [fecha]
+Organism: Homo sapiens / Mus musculus
+Experiment type: Expression profiling by high throughput sequencing
+Summary: descripción del experimento
+Overall design: grupos y condiciones
+Samples (GSM): lista de muestras individuales
+```
+
+### Los estudios de este curso
+
+En este curso trabajamos con dos estudios de COVID-19 en PBMC de sangre periférica humana:
+
+| GSE | BioProject | Descripción | Grupos de interés |
+|-----|-----------|-------------|-------------------|
+| **GSE166253** | PRJNA699856 | Pacientes COVID-19 con infección moderada; incluye convalecientes y casos de re-positivización (RTP) | `convalescent` vs `retesting-positive (RTP)`, que homologamos a `acute` |
+| **GSE202805** | PRJNA837285 | Cohorte de Singapur con pacientes en fase aguda y convalecientes de distintas severidades | `convalescent` vs `acute` |
+
+Ambos estudios usaron secuenciación **Illumina paired-end (150 pb)** en **PBMCs**, lo que los hace compatibles para analizarlos con el mismo pipeline. La comparación de interés en los dos es **pacientes convalecientes vs pacientes con infección activa**.
+
+---
+
+## 5. Descarga de archivos FASTQ
+
+### Opción A: Desde EBI (recomendada para un script de descarga limpio)
+
+1. Ve a https://www.ebi.ac.uk/
+2. En el buscador, teclea el ID del estudio (ej. `PRJNA647867` o el GSE)
+3. En los resultados, selecciona la entrada con **Nucleotide sequences**
+4. En la tabla inferior, en la columna **Generated FASTQ files: FTP**, selecciona las muestras
+5. Da click en **Get download script** (genera un script de bash con `wget`)
+
+El script para descargar los archivos se ve así:
+
+```{bash}
+#| eval: false
+
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/092/SRR12363092/SRR12363092_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/092/SRR12363092/SRR12363092_2.fastq.gz
+# ... más muestras
+```
+
+### Opción B: Desde SRA con `prefetch` + `fasterq-dump`
+
+```{bash}
+#| eval: false
+
+# Instalar SRA toolkit primero
+# https://github.com/ncbi/sra-tools
+
+# Descargar con prefetch
+prefetch SRR12363092
+
+# Convertir a FASTQ
+fasterq-dump SRR12363092 --outdir ./data/
+```
+
+### Ejecutar el script de descarga
+
+```{bash}
+#| eval: false
+
+# Crear carpeta para los datos
+mkdir -p RNA_project/data
+
+# Ir a la carpeta
+cd RNA_project/data
+
+# Guardar el script de descarga ahí y ejecutar
+chmod +x downloads.sh
+./downloads.sh
+```
+
+**Nota:** La bandera `-nc` (no-clobber) en wget evita descargar un archivo que ya existe. Muy útil si la descarga se interrumpe.
+
+---
+
+## 6. Organización del proyecto
+
+Una estructura ordenada es clave para reproducibilidad:
+
+```
+rna/
+|
+└── scripts/           # Scripts utilizados
+│   ├── download_fastq.sh
+├── data/              # FASTQs crudos
+│   ├── SRR12363092_1.fastq.gz
+│   ├── SRR12363092_2.fastq.gz
+│   └── ...
+├── metadata/          # Información de las muestras
+│   └── metadata.csv
+├── quality1/          # FastQC antes de trimming
+├── quality2/          # FastQC después de trimming
+├── TRIM_results/      # FASTQs post-trimming
+├── STAR_index/        # Índice del genoma
+├── STAR_output/       # BAMs y matrices de cuentas
+├── counts/            # Matrices de cuentas finales
+```
+
+### Archivo de metadatos
+
+Siempre crea un archivo CSV con la información de tus muestras. Para este curso, el archivo de metadatos tiene el formato:
+
+```
+sample_id,study,status,severity
+SRR13639990,GSE166253,convalescent,moderate
+SRR13639995,GSE166253,acute,moderate
+SRR19173191,GSE202805,convalescent,severe_and_icu
+SRR19173185,GSE202805,acute,severe_and_icu
+```
+
+---
+
+## 7. Script de metadatos del curso
+
+Para generar el archivo de metadatos combinado de los dos estudios utilizamos el script `scripts/crear_metadatos_curso.R`. Este script:
+
+1. Carga los metadatos originales de cada estudio desde `data/` (`GSE166253_metadata.csv` y `GSE202805_metadata.csv`), que contienen las muestras seleccionadas y descargadas para el curso (8 por estudio, ver `scripts/download_fastq.sh`)
+2. Filtra las muestras de interés (convalescent y acute/RTP)
+3. Estandariza los valores de `status` y extrae la columna `severity` de cada estudio
+4. Combina ambos estudios y guarda el resultado en `data/metadatos_curso.csv`
+
+```{r}
+#| eval: false
+
+# Ejecutar desde la raíz del proyecto
+source("scripts/crear_metadatos_curso.R")
+```
+
+El archivo resultante `data/metadatos_curso.csv` tiene 16 muestras (8 por estudio):
+
+| Estudio | convalescent | acute |
+|---------|-------------|-------|
+| GSE166253 | 4 | 4 |
+| GSE202805 | 4 | 4 |
+
+---
+
+## 8. Consejos para homologar lecturas entre estudios
+
+Si quieres combinar datos de múltiples estudios, considera:
+
+- **Misma plataforma de secuenciación:** Illumina vs. otros
+- **Mismo protocolo:** Paired-end vs. single-end, stranded vs. unstranded
+- **Mismo organismo:** humano, ratón, zebrafish, etc.
+- **Batch effects:** Los estudios distintos tienen efectos de lote, se abordarán en la clase 4
+
+---
+
+## Ejercicio práctico
+
+1. Ve a GEO y busca: `COVID-19 RNA-seq PBMC convalescent`
+2. Explora las páginas de **GSE166253** y **GSE202805** e identifica:
+   - El número total de muestras por grupo
+   - La plataforma de secuenciación utilizada
+   - El BioProject asociado (PRJNA...)
+3. Desde EBI, usando el BioProject de uno de los dos estudios, genera el script de descarga para las 4 muestras convalecientes (sin ejecutarlo)
+4. Abre `data/metadatos_curso.csv` y verifica que las columnas `sample_id`, `study`, `status` y `severity` sean correctas
+5. Ejecuta `scripts/crear_metadatos_curso.R` y revisa el output en consola
+
+---
+
+## Recursos
+
+- [GEO NCBI](https://www.ncbi.nlm.nih.gov/geo/)
+- [EBI SRA Search](https://www.ebi.ac.uk/ena/browser/home)
+- [SRA Toolkit GitHub](https://github.com/ncbi/sra-tools)
+- [Tutorial de GEO — NCBI](https://www.ncbi.nlm.nih.gov/geo/info/overview.html)
