@@ -12,7 +12,7 @@ Como caso de estudio se analiza la respuesta transcriptómica al **SARS-CoV-2** 
 | 2 | Control de calidad de lecturas | FastQC, MultiQC, Trimmomatic |
 | 3 | Alineamiento y conteo | STAR |
 | 4 | Importación a R, visualización y batch correction | DESeq2, ggplot2, sva, limma |
-| 5 | Expresión diferencial | DESeq2, apeglm |
+| 5 | Expresión diferencial | DESeq2 |
 
 ## Estructura del repositorio
 
