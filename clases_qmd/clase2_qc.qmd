@@ -256,7 +256,7 @@ for i in *_1.fastq.gz; do
     "../TRIM_results/${base}_1_unpaired.fq.gz" \
     "../TRIM_results/${base}_2_trimmed.fq.gz" \
     "../TRIM_results/${base}_2_unpaired.fq.gz" \
-    ILLUMINACLIP:/ruta/a/TruSeq3-PE-2.fa:2:30:10 \
+    ILLUMINACLIP:NexteraPE-PE.fa:2:30:10 \
     LEADING:3 \
     TRAILING:3 \
     SLIDINGWINDOW:4:20 \

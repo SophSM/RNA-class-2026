@@ -14,6 +14,7 @@ cd /mnt/data/amedina/ssalazar/rna/
 
 module load star/2.7.11a
 
+
 INDEX=STAR_index
 TRIM_DIR=TRIM_results
 OUT_DIR=STAR_output
@@ -23,6 +24,13 @@ mkdir -p $OUT_DIR
 samples=($TRIM_DIR/*_1_trimmed.fq.gz)
 f="${samples[$SLURM_ARRAY_TASK_ID]}"
 base=$(basename "$f" _1_trimmed.fq.gz)
+
+OUT_BAM="$OUT_DIR/${base}_Aligned.sortedByCoord.out.bam"
+
+if [ -s "$OUT_BAM" ]; then
+    echo "Salida ya existe para $base, saltando: $OUT_BAM"
+    exit 0
+fi
 
 echo "Alineando: $base"
 STAR \
