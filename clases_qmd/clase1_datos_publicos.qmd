@@ -175,6 +175,9 @@ wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/092/SRR12363092/SRR12363092_2
 # Instalar SRA toolkit primero
 # https://github.com/ncbi/sra-tools
 
+# O cargar el modulo en el cluster fenix:
+module load sra/3.0.0
+
 # Descargar con prefetch
 prefetch SRR12363092
 
@@ -188,10 +191,10 @@ fasterq-dump SRR12363092 --outdir ./data/
 #| eval: false
 
 # Crear carpeta para los datos
-mkdir -p RNA_project/data
+mkdir -p rna/data
 
 # Ir a la carpeta
-cd RNA_project/data
+cd rna/data
 
 # Guardar el script de descarga ahí y ejecutar
 chmod +x downloads.sh

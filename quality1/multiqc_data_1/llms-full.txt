@@ -22,13 +22,49 @@ You must use only multiples of 4 spaces to indent nested lists.
 
 
 
-Two examples of short summaries:
+Next, generate a more detailed summary of the results, and your recommendations for the next steps.
 
-- :span[11/13 samples]{.text-green} show consistent metrics within expected ranges.
-- :sample[A1001.2003]{.text-red} and :sample[A1001.2004]{.text-red} exhibit extremely high percentage of :span[duplicates]{.text-red} (:span[65.54%]{.text-red} and :span[83.14%]{.text-red}, respectively).
+Make sure to use a multiple of 4 spaces to indent nested lists.
 
-- All samples show good quality metrics with :span[75.7-77.0%]{.text-green} CpG methylation and :span[76.3-86.0%]{.text-green} alignment rates
-- :sample[2wk]{.text-yellow} samples show slightly higher duplication (:span[11-15%]{.text-yellow}) compared to :sample[1wk]{.text-green} samples (:span[6-9%]{.text-green})'
+Highlight severity of the values and the sample names with directives and the pre-defined classes, similar to the short summary,
+as in the example below.
+
+
+Example, formatted as YAML of 2 sections (summary, detailed_analysis):
+
+summary: |
+    - :span[11/13 samples]{.text-green} show consistent metrics within expected ranges.
+    - :sample[A1001.2003]{.text-red} and :sample[A1001.2004]{.text-red} exhibit extremely high percentage of :span[duplicates]{.text-red} (:span[65.54%]{.text-red} and :span[83.14%]{.text-red}, respectively).
+
+
+
+detailed_analysis: |
+    ##### Analysis
+
+    - :sample[A1002]{.text-yellow} and :sample[A1003]{.text-yellow} groups (:span[11/13 samples]{.text-green}) show good quality metrics, with consistent GC content (38-39%), read lengths (125 bp), and acceptable levels of duplicates and valid pairs.
+    - :sample[A1001.2003]{.text-red} and :sample[A1001.2004]{.text-red} show severe quality issues:
+        - Extremely high duplicate rates (:span[65.54%]{.text-red} and :span[83.14%]{.text-red})
+        - Low percentages of valid pairs (:span[37.2%]{.text-red} and :span[39.2%]{.text-red})
+        - High percentages of failed modules in FastQC (:span[33.33%]{.text-red})
+        - Significantly higher total sequence counts (:span[141.9M]{.text-red} and :span[178.0M]{.text-red}) compared to other samples
+        - FastQC results indicate that :sample[A1001.2003]{.text-red} and :sample[A1001.2004]{.text-red} have a slight :span[GC content]{.text-red} bias at 39.5% against most other samples having 38.0%, which indicates a potential contamination that could be the source of other anomalies in quality metrics.
+
+    - :sample[A1002-1007]{.text-yellow} shows some quality concerns:
+        - Low percentage of valid pairs (:span[48.08%]{.text-yellow})
+        - Low percentage of passed Di-Tags (:span[22.51%]{.text-yellow})
+
+    - Overrepresented sequences analysis reveals adapter contamination in several samples, particularly in :sample[A1001.2003]{.text-yellow} (up to :span[35.82%]{.text-yellow} in Read 1).
+    - HiCUP analysis shows that most samples have acceptable levels of valid pairs, with :sample[A1003]{.text-green} group generally performing better than :sample[A1002]{.text-yellow} group.
+
+    ##### Recommendations
+
+    - Remove :sample[A1001.2003]{.text-red} and :sample[A1200.2004]{.text-red} from further analysis due to severe quality issues.
+    - Investigate the cause of low valid pairs and passed Di-Tags in :sample[A1002-1007]{.text-yellow}. Consider removing it if the issue cannot be resolved.
+    - Perform adapter trimming on all samples, particularly focusing on :sample[A1001]{.text-red} group.
+    - Re-run the Hi-C analysis pipeline after removing problematic samples and performing adapter trimming.
+    - Investigate the cause of higher duplication rates in :sample[A1002]{.text-yellow} group compared to :sample[A1003]{.text-green} group, although they are still within acceptable ranges.
+    - Consider adjusting the Hi-C protocol or library preparation steps to improve the percentage of valid pairs, especially for :sample[A1002]{.text-yellow} group.
+
 
 
 
@@ -42,6 +78,55 @@ Links: http://www.bioinformatics.babraham.ac.uk/projects/fastqc/
 
 ----------------------
 
+    MultiQC General Statistics (overview of key QC metrics for each sample, across all tools)
+    Plot type: violin plot
+
+Number of samples: 32
+
+Metrics:
+Dups - % duplicate reads
+GC - Average % GC content
+Avg len - Average read length
+Median len - Median read length
+Failed - Percentage of modules failed in FastQC report (includes those not plotted here)
+Seqs - Total sequences (millions)
+
+|Sample Name|Dups|GC|Avg len|Median len|Failed|Seqs|
+|---|---|---|---|---|---|---|
+|SRR13639990_1|50.69|48.0|150|150|20|20.09|
+|SRR13639990_2|50.64|48.0|150|150|20|20.09|
+|SRR13639992_1|52.07|48.0|150|150|20|20.12|
+|SRR13639992_2|51.99|48.0|150|150|20|20.12|
+|SRR13639993_1|56.95|48.0|150|150|20|20.58|
+|SRR13639993_2|56.24|48.0|150|150|20|20.58|
+|SRR13639994_1|53.82|49.0|150|150|20|20.51|
+|SRR13639994_2|54.01|49.0|150|150|20|20.51|
+|SRR13639995_1|45.45|47.0|150|150|10|20.26|
+|SRR13639995_2|44.95|47.0|150|150|10|20.26|
+|SRR13639999_1|51.36|48.0|150|150|20|20.74|
+|SRR13639999_2|50.59|48.0|150|150|20|20.74|
+|SRR13640002_1|49.70|48.0|150|150|10|20.80|
+|SRR13640002_2|48.92|48.0|150|150|10|20.80|
+|SRR13640004_1|51.66|48.0|150|150|20|20.35|
+|SRR13640004_2|50.78|48.0|150|150|20|20.35|
+|SRR19173185_1|61.51|49.0|150|150|18|19.45|
+|SRR19173185_2|59.58|49.0|150|150|9|19.45|
+|SRR19173191_1|55.16|47.0|150|150|18|16.59|
+|SRR19173191_2|51.22|47.0|150|150|18|16.59|
+|SRR19173211_1|50.37|47.0|150|150|18|20.34|
+|SRR19173211_2|48.51|48.0|150|150|9|20.34|
+|SRR19173215_1|41.93|48.0|150|150|18|17.12|
+|SRR19173215_2|36.78|48.0|150|150|18|17.12|
+|SRR19173217_1|47.85|48.0|150|150|18|21.22|
+|SRR19173217_2|40.81|48.0|150|150|9|21.22|
+|SRR19173231_1|46.51|47.0|150|150|9|16.57|
+|SRR19173231_2|45.07|47.0|150|150|9|16.57|
+|SRR19173232_1|52.37|48.0|150|150|18|13.74|
+|SRR19173232_2|50.07|48.0|150|150|18|13.74|
+|SRR19173243_1|60.39|48.0|150|150|18|20.02|
+|SRR19173243_2|58.45|48.0|150|150|18|20.02|
+
+    
 ----------------------
 
 Tool: FastQC

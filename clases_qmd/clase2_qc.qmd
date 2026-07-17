@@ -98,7 +98,7 @@ cd rna
 mkdir -p quality1
 
 # Correr FastQC en un solo archivo
-fastqc data/SRR12363092_1.fastq.gz \
+fastqc data/SRR19173185_1.fastq.gz \
   -o quality1/
 
 # Correr FastQC en todos los archivos FASTQ (loop)
@@ -149,8 +149,8 @@ pip install multiqc
 srun -p interactive --pty bash
 
 # Apuntar a la carpeta donde están los outputs de FastQC
-multiqc rna/quality1/ \
-  -o rna/quality1/
+multiqc quality1/ \
+  -o quality1/
 
 export SEQERA_ACCESS_TOKEN=""
 
@@ -301,7 +301,7 @@ ILLUMINACLIP:<adapters>:<seedMismatches>:<palindromeClipThreshold>:<simpleClipTh
 - `palindromeClipThreshold`: puntaje mínimo para detectar contaminación de adaptadores por el método *palindrome*, que aprovecha que en modo PE ambas lecturas de un par se solapan cuando el fragmento es corto. Es muy sensible; por eso el umbral es alto (30 ≈ ~50 bases de coincidencia).
 - `simpleClipThreshold`: puntaje mínimo para el método *simple*, que busca el adaptador directamente dentro de cada lectura por separado. Un valor de 10 equivale a ~17 bases de coincidencia.
 
-> En resumen: `ILLUMINACLIP:TruSeq3-PE-2.fa:2:30:10` significa "busca este adaptador permitiendo 2 mismatches, con umbral 30 para el modo palindrome y 10 para el modo simple".
+> En resumen: `ILLUMINACLIP:NexteraPE-PE.fa:2:30:10` significa "busca este adaptador permitiendo 2 mismatches, con umbral 30 para el modo palindrome y 10 para el modo simple".
 
 #### Pasos 2 a 5 — recorte por calidad y longitud
 
@@ -326,18 +326,18 @@ Después de Trimmomatic, corremos FastQC y MultiQC de nuevo para verificar la me
 
 ```{bash}
 # FastQC a los archivos trimmed
-mkdir -p rna/quality2
+mkdir -p quality2
 
-for file in rna/TRIM_results/*_trimmed.fq.gz; do
-  fastqc "$file" -o rna/quality2/
+for file in TRIM_results/*_trimmed.fq.gz; do
+  fastqc "$file" -o quality2/
 done
 
 # MultiQC sobre los trimmed
-multiqc rna/quality2/ -o rna/quality2/
+multiqc quality2/ -o quality2/
 
 # Con AI
-multiqc rna/quality2/ \
-  -o rna/quality2/ \
+multiqc quality2/ \
+  -o quality2/ \
   --ai-summary-full \
   --ai-provider seqera
 ```

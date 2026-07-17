@@ -245,11 +245,14 @@ library(pheatmap)
 # Genes significativos
 sig_genes <- rownames(res_df[res_df$significant & !is.na(res_df$significant), ])
 
-# Normalización VST para el heatmap
-vsd <- vst(dds, blind = FALSE)
+# Transformación para el heatmap (ver clase 4: nunca graficamos cuentas crudas).
+# Usamos rlog porque son 16 muestras; con n >= 30 usaríamos vst().
+# blind = FALSE: aquí sí queremos que la transformación conozca el diseño,
+# porque ya no estamos explorando a ciegas.
+rld <- rlog(dds, blind = FALSE)
 
 # Extraer la matriz de expresión de los genes significativos
-mat <- assay(vsd)[sig_genes, ]
+mat <- assay(rld)[sig_genes, ]
 
 # Centrar por fila (z-score)
 mat_scaled <- t(scale(t(mat)))

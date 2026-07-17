@@ -13,7 +13,7 @@ conda activate /mnt/data/amedina/ssalazar/envs/rna_env
 
 cd /mnt/data/amedina/ssalazar/rna
 mkdir -p quality2
-mkdir -p quality2
+
 for file in TRIM_results/*_trimmed.fq.gz; do
   base=$(basename "$file" _trimmed.fq.gz)
   out="quality2/${base}_trimmed_fastqc.html"

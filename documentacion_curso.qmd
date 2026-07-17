@@ -509,24 +509,79 @@ keep <- rowSums(counts(dds)) >= 10
 dds <- dds[keep, ]
 ```
 
-## Transformación para visualización
+## ¿Por qué no se hace el PCA con cuentas crudas?
+
+El PCA es un método basado en **varianza**: busca las direcciones en las que los datos varían más. Las cuentas crudas de RNA-seq tienen dos propiedades que hacen que esa varianza esté dominada por artefactos técnicos y no por biología.
+
+### Problema 1: profundidad de secuenciación
+
+Las cuentas crudas no están corregidas por el tamaño de la librería. Una muestra con 40M de lecturas tiene **todas** sus cuentas sistemáticamente más altas que una con 20M, aunque el perfil biológico sea idéntico. El PCA captura esa diferencia global primero, así que PC1 acaba siendo "cuántas lecturas tuvo cada muestra".
+
+Al combinar dos estudios (GSE166253 + GSE202805) el riesgo es mayor: sin normalizar, una diferencia de profundidad se confunde con el batch effect que queremos diagnosticar.
+
+### Problema 2: heterocedasticidad (la varianza depende de la media)
+
+En datos de conteo, los genes muy expresados varían más en términos absolutos. Un gen con media de 10,000 cuentas varía ±1,000; uno con media de 10 varía ±3. Biológicamente pueden estar cambiando lo mismo, pero para el PCA el primero pesa ~300 veces más.
+
+Los primeros componentes quedan dominados por genes altamente expresados (ribosomales, mitocondriales, hemoglobinas), algo crítico en **PBMCs de sangre**.
+
+### ¿Y por qué no un `log2()` simple?
+
+Ayuda con el problema 2 pero introduce otro: en cuentas bajas el log **infla el ruido**. Pasar de 1 a 2 cuentas es un log2FC de +1, igual que pasar de 5,000 a 10,000; lo primero es ruido de muestreo y lo segundo señal real. Como los genes de baja expresión son muchísimos, dominarían el PCA con puro ruido.
+
+### Demostración con cuentas crudas
 
 ```{r}
-# VST — recomendado para n ≥ 30
+raw_counts <- counts(dds)
+
+# Los 500 genes más variables (lo mismo que hace plotPCA por dentro)
+gene_vars <- apply(raw_counts, 1, var)
+select <- order(gene_vars, decreasing = TRUE)[1:500]
+
+pca_raw <- prcomp(t(raw_counts[select, ]))
+
+# PC1 correlaciona casi perfectamente con la profundidad: |r| > 0.9
+cor(pca_raw$x[, 1], colSums(counts(dds)))
+```
+
+## Transformación para visualización
+
+VST y rlog resuelven los dos problemas a la vez:
+
+1. **Normalizan por profundidad**, usando los *size factors* de DESeq2 (mediana de ratios).
+2. **Estabilizan la varianza**: escala aproximadamente log2, con *shrinkage* sobre los genes de baja expresión para que su ruido no domine.
+
+El resultado es una matriz con varianza aproximadamente homogénea en todo el rango de expresión, que es lo que el PCA y la distancia euclidiana asumen.
+
+```{r}
+# VST — recomendado para n ≥ 30 (más rápido)
 vsd <- vst(dds, blind = TRUE)
 
-# rlog — para n < 30
+# rlog — para n < 30 (más robusto con pocas muestras, más lento)
 rld <- rlog(dds, blind = TRUE)
 ```
+
+`blind = TRUE`: la transformación no usa el diseño experimental, para no sesgar el PCA a favor de la separación acute/convalescent que estamos evaluando.
+
+**En este curso son 16 muestras → usamos `rld` para todas las visualizaciones.**
+
+### Regla: transformar es solo para visualizar
+
+| Para qué | Qué datos usar |
+|----------|----------------|
+| PCA, heatmaps, clustering | Datos transformados (`vsd` / `rld`) |
+| Expresión diferencial (DESeq2) | Cuentas **crudas** (enteros) |
+
+DESeq2 **exige** cuentas crudas porque modela explícitamente la relación media-varianza con una binomial negativa: la transformación destruiría justo la información que el modelo necesita. Nunca pasar datos transformados a `DESeq()`.
 
 ## PCA
 
 ```{r}
 # PCA básico
-plotPCA(vsd, intgroup = "status") + theme_bw()
+plotPCA(rld, intgroup = "status") + theme_bw()
 
 # PCA personalizado (color por grupo biológico y forma por estudio)
-pca_data <- plotPCA(vsd, intgroup = c("status", "study"), returnData = TRUE)
+pca_data <- plotPCA(rld, intgroup = c("status", "study"), returnData = TRUE)
 percent_var <- round(100 * attr(pca_data, "percentVar"))
 
 ggplot(pca_data, aes(PC1, PC2, color = status, shape = study)) +
@@ -534,12 +589,15 @@ ggplot(pca_data, aes(PC1, PC2, color = status, shape = study)) +
   xlab(paste0("PC1: ", percent_var[1], "% varianza")) +
   ylab(paste0("PC2: ", percent_var[2], "% varianza")) +
   theme_bw()
+
+# Verificación: PC1 ya no debería correlacionar con la profundidad
+cor(pca_data$PC1, colSums(counts(dds)))
 ```
 
 ## Heatmap de correlación entre muestras
 
 ```{r}
-sampleDists <- dist(t(assay(vsd)))
+sampleDists <- dist(t(assay(rld)))
 sampleDistMatrix <- as.matrix(sampleDists)
 colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
 
@@ -592,9 +650,9 @@ dds_corrected <- DESeqDataSetFromMatrix(
 ```{r}
 library(limma)
 
-vsd_corrected <- vsd
-assay(vsd_corrected) <- removeBatchEffect(
-  assay(vsd),
+rld_corrected <- rld
+assay(rld_corrected) <- removeBatchEffect(
+  assay(rld),
   batch  = metadata$study,
   design = model.matrix(~ status, data = metadata)
 )
@@ -709,8 +767,12 @@ plotMA(res_shrunk, ylim = c(-5, 5), alpha = 0.05)
 
 ```{r}
 sig_genes <- rownames(res_df[res_df$significant & !is.na(res_df$significant), ])
-vsd_final <- vst(dds, blind = FALSE)
-mat <- assay(vsd_final)[sig_genes, ]
+
+# rlog porque son 16 muestras (con n ≥ 30 usar vst).
+# blind = FALSE: aquí sí queremos que la transformación conozca el diseño,
+# porque ya no estamos explorando a ciegas.
+rld_final <- rlog(dds, blind = FALSE)
+mat <- assay(rld_final)[sig_genes, ]
 mat_scaled <- t(scale(t(mat)))
 
 pheatmap(
@@ -799,9 +861,9 @@ colnames(counts) <- sub("_ReadsPerGene.out.tab", "", files)
 dds <- DESeqDataSetFromMatrix(counts, metadata, ~ status)
 dds <- dds[rowSums(counts(dds)) >= 10, ]
 
-# Exploración
-vsd <- vst(dds, blind = TRUE)
-plotPCA(vsd, intgroup = "status")
+# Exploración (rlog porque son 16 muestras; con n ≥ 30 usar vst)
+rld <- rlog(dds, blind = TRUE)
+plotPCA(rld, intgroup = "status")
 
 # Batch correction (study = estudio de origen)
 counts_corr <- ComBat_seq(as.matrix(counts(dds)), batch = metadata$study, group = metadata$status)
