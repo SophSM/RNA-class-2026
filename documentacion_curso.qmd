@@ -441,14 +441,16 @@ done
 if (!require("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
 
-BiocManager::install(c("DESeq2", "sva", "limma", "pheatmap",
-                        "ggplot2", "RColorBrewer", "dplyr"))
+BiocManager::install(c("DESeq2", "sva", "limma", "pheatmap", "ComplexHeatmap",
+                        "circlize", "ggplot2", "RColorBrewer", "dplyr"))
 ```
 
 ```{r}
 library(DESeq2)
 library(ggplot2)
 library(pheatmap)
+library(ComplexHeatmap)
+library(circlize)        # colorRamp2, para las escalas de color
 library(RColorBrewer)
 library(dplyr)
 library(sva)
@@ -548,7 +550,7 @@ cor(pca_raw$x[, 1], colSums(counts(dds)))
 
 VST y rlog resuelven los dos problemas a la vez:
 
-1. **Normalizan por profundidad**, usando los *size factors* de DESeq2 (mediana de ratios).
+1. **Normalizan por profundidad**, usando los *size factors* de DESeq2.
 2. **Estabilizan la varianza**: escala aproximadamente log2, con *shrinkage* sobre los genes de baja expresión para que su ruido no domine.
 
 El resultado es una matriz con varianza aproximadamente homogénea en todo el rango de expresión, que es lo que el PCA y la distancia euclidiana asumen.
@@ -626,6 +628,32 @@ Un **batch effect** es variación técnica no biológica causada por:
 | Batch conocido, bien balanceado | `design = ~ study + status` |
 | Batch conocido, desbalanceado | ComBat-seq |
 | Batch desconocido | SVA |
+
+### Detección con SVA
+
+```{r}
+mod  <- model.matrix(~ status, data = colData(dds))
+mod0 <- model.matrix(~ 1, data = colData(dds))
+
+# svaseq NO normaliza por profundidad: hay que pasarle cuentas normalizadas
+dds <- estimateSizeFactors(dds)
+dat <- counts(dds, normalized = TRUE)
+dat <- dat[rowMeans(dat) > 1, ]
+
+svseq <- svaseq(dat, mod, mod0)
+svseq$n.sv
+```
+
+**Por qué cuentas normalizadas y no `vst`/`rlog`:** `svaseq` aplica internamente `log(dat + 1)` y nada más. Ese log corrige la heterocedasticidad, pero **no** la profundidad de secuenciación, así que si le pasas cuentas crudas la primera SV acaba siendo el tamaño de librería en lugar del batch. Y pasarle una matriz ya transformada duplicaría el log: con `rlog` falla directamente (produce valores negativos y `svaseq` los rechaza), y con `vst` es peor, porque corre sin error pero el resultado está mal.
+
+| Datos que tienes | Función |
+|---|---|
+| Cuentas normalizadas | `svaseq()` |
+| Matriz transformada (`assay(vsd)` / `assay(rld)`) | `sva()` |
+
+`n.sv` no cuenta lotes ocultos: las SVs son componentes ortogonales del ruido residual, y un mismo efecto técnico puede repartirse entre varias. Para interpretarlas hay que correlacionarlas con las covariables conocidas (`study`, profundidad, `status`).
+
+**Ojo con el diseño de este curso:** `severity` está completamente anidado en `study` (GSE166253 es todo `moderate`, GSE202805 todo `severe`/`severe_and_icu`), así que las dos variables son estadísticamente indistinguibles y no se puede separar su efecto.
 
 ### ComBat-seq (recomendada)
 

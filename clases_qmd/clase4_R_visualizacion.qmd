@@ -24,7 +24,7 @@ Al finalizar esta sesión podrás:
 - Hacer exploración visual de los datos con PCA y heatmaps
 - Entender qué son los efectos de lote (batch effects)
 - Detectar batch effects en tus datos
-- Aplicar corrección de batch con ComBat-seq o limma
+- Aplicar corrección de batch
 
 ---
 
@@ -80,7 +80,7 @@ files
 counts <- c()
 
 for (i in seq_along(files)) {
-  x <- read.table(file = files[i], sep = "\t", header = FALSE, as.is = TRUE)
+  x <- read.table(file = files[i], sep = "\t", header = FALSE)
   counts <- cbind(counts, x[, 2])
 }
 
@@ -164,13 +164,8 @@ Antes de transformar nada, hagamos el experimento de graficar un PCA directament
 # Matriz de cuentas crudas (después del filtro de genes)
 raw_counts <- counts(dds)
 
-# Nos quedamos con los 500 genes más variables
-# (es lo mismo que hace plotPCA por dentro)
-gene_vars <- apply(raw_counts, 1, var)
-select <- order(gene_vars, decreasing = TRUE)[1:500]
-
 # PCA: prcomp espera muestras en las filas, por eso trasponemos con t()
-pca_raw <- prcomp(t(raw_counts[select, ]))
+pca_raw <- prcomp(t(raw_counts))
 
 # Porcentaje de varianza explicada por cada componente
 percent_var_raw <- round(100 * pca_raw$sdev^2 / sum(pca_raw$sdev^2))
@@ -201,7 +196,7 @@ ggplot(pca_raw_df, aes(x = PC1, y = PC2, color = status, shape = study)) +
 
 ### ¿Qué estamos viendo realmente?
 
-El PCA se ve "raro": típicamente PC1 explica un porcentaje alto de la varianza y las muestras no se separan por grupo biológico.
+El PCA se ve "raro": las muestras no se separan por grupo biológico.
 
 Ahora grafiquemos PC1 contra la profundidad de secuenciación.
 
@@ -217,7 +212,7 @@ ggplot(pca_raw_df, aes(x = profundidad, y = PC1, color = study)) +
 cor(pca_raw_df$PC1, pca_raw_df$profundidad)
 ```
 
-Esta correlación suele ser alta. Es decir: **PC1 no es biología, es cuántas lecturas tuvo cada muestra.**. Este es un artefacto técnico.
+La correlación parece alta, sin embargo no parece la única fuente de variación en PC1, parece que se debe más a la diferencia entre estudios y esto puede tener razones aparte de la profundidad de secuenciación.
 
 ---
 
@@ -235,7 +230,7 @@ En nuestro caso esto es especialmente importante, porque estamos combinando **do
 
 En datos de conteo, **los genes muy expresados varían más en términos absolutos**. Un gen con media de 10,000 cuentas puede variar ±1,000 entre muestras; uno con media de 10 varía ±3. Biológicamente los dos pueden estar cambiando lo mismo (un fold-change de 1.3x), pero para el PCA el primero pesa 300 veces más.
 
-Resultado: los primeros componentes quedan dominados por un grupo de genes altamente expresados: ribosomales, mitocondriales, hemoglobinas. No estaríamos viendo estructura biológica, sino qué tan expresados están los genes más abundantes.
+Resultado: los primeros componentes quedan dominados por un grupo de genes altamente expresados: ribosomales, mitocondriales, etc. No estaríamos viendo estructura biológica, sino qué tan expresados están los genes más abundantes.
 
 ```{r}
 # Veamos la relación media-varianza en las cuentas crudas
@@ -256,7 +251,7 @@ ggplot(mean_var, aes(x = media, y = varianza)) +
 
 Ambas transformaciones de DESeq2 resuelven las dos cosas a la vez:
 
-1. **Normalizan por profundidad**, usando los *size factors* de DESeq2 (mediana de ratios).
+1. **Normalizan por profundidad**, usando los *size factors* de DESeq2.
 
 2. **Estabilizan la varianza**: llevan los datos a una escala aproximadamente log2, pero aplicando un encogimiento (*shrinkage*) sobre los genes de baja expresión, para que su ruido no domine.
 
@@ -300,7 +295,7 @@ vsd <- vst(dds, blind = TRUE)
 
 ```{r}
 # Alternativa a VST, mejor para datos con pocas muestras (< 30)
-rld <- rlog(dds, blind = TRUE)
+rld <- rlog(dds, blind = T)
 ```
 
 ### ¿Cuál de las dos uso?
@@ -338,19 +333,24 @@ Ahora sí, el PCA sobre datos transformados. El PCA nos muestra la variabilidad 
 
 - Si las muestras se agrupan por otro factor (estudio de origen, sexo, etc.), posible batch effect
 
+
+*Nota: en la funcion plotPCA, ntop controla el numero de genes mas variables que se van a usar para el PCA. El default es 500. Una vez que controlamos por la varianza, el PCA no suele cambiar mucho, es cuestion de rapidez. Para propósitos de publicación, considero que es mejor reportar el PCA con todos los genes.*
+
 ```{r}
 # PCA con DESeq2 (función rápida)
-plotPCA(rld, intgroup = "status") +
+plotPCA(rld, intgroup = "status", ntop = nrow(rld)) +
   theme_bw() +
-  ggtitle("PCA: Agudo vs. Convaleciente")
+  ggtitle("PCA: con cuentas transformadas (rlog)")
+
 ```
 
-Compara este gráfico con el de la sección 4: los porcentajes de varianza de PC1 y PC2 deben ser mucho más razonables, y las muestras ya deberían ordenarse por algo interpretable.
+
+Compara este gráfico con el de la sección 4: las muestras se separan más claramente por estudio pero dentro de cada uno vemos también una separación por condición biológica. Esta forma de comparar entre estudios pre-batch correction es la más justa.
 
 ```{r}
 # PCA personalizado con ggplot2
 # Coloreamos por grupo biológico (status) y usamos la forma para el estudio (study)
-pca_data <- plotPCA(rld, intgroup = c("status", "study"), returnData = TRUE)
+pca_data <- plotPCA(rld, intgroup = c("status", "study"), returnData = TRUE, ntop = nrow(rld))
 percent_var <- round(100 * attr(pca_data, "percentVar"))
 
 ggplot(pca_data, aes(x = PC1, y = PC2, color = status, shape = study)) +
@@ -358,13 +358,7 @@ ggplot(pca_data, aes(x = PC1, y = PC2, color = status, shape = study)) +
   xlab(paste0("PC1: ", percent_var[1], "% varianza")) +
   ylab(paste0("PC2: ", percent_var[2], "% varianza")) +
   theme_bw() +
-  ggtitle("PCA de muestras de RNA-seq")
-```
-
-```{r}
-# Verificación: ¿PC1 sigue correlacionando con la profundidad?
-# Ahora la correlación debería ser mucho más baja que con las cuentas crudas
-cor(pca_data$PC1, colSums(counts(dds)))
+  ggtitle("PCA: con cuentas transformadas (rlog)")
 ```
 
 ---
@@ -406,6 +400,8 @@ Un **batch effect** es la variación técnica no biológica que puede surgir cua
 
 - Se usaron **diferentes versiones** del kit de secuenciación
 
+- Tenemos muestras de **estudios diferentes**
+
 ### ¿Por qué importa?
 
 Si el batch effect no se corrige, puede confundirse con la señal biológica real y generar falsos positivos/negativos en el análisis diferencial.
@@ -415,8 +411,8 @@ Si el batch effect no se corrige, puede confundirse con la señal biológica rea
 En este curso el batch más evidente es el **estudio de origen** (`study`): GSE166253 y GSE202805 se secuenciaron en laboratorios y corridas distintas. Si en el PCA las muestras se separan por **estudio** en lugar de por **grupo biológico**, eso indica un batch effect:
 
 ```
-PC1 (30% var): Separación por STUDY (técnico) ← problema
-PC2 (15% var): Separación por STATUS (biológico)
+PC1 (40% var): Separación por STUDY (técnico) ← problema
+PC2 (11% var): Separación por STATUS (biológico)
 ```
 
 Lo ideal es que la separación por STATUS (agudo vs. convaleciente) sea la principal fuente de variación.
@@ -436,15 +432,129 @@ plotPCA(rld, intgroup = "study") +
 
 ### Prueba estadística con `sva::svaseq`
 
+SVA detecta **variables de confusión no observadas** (*surrogate variables*): direcciones de variación que están presentes en los datos, que no se explican por la variable biológica de interés, y para las cuales no tenemos una columna en los metadatos.
+
 ```{r}
-# SVA detecta variables de confusión no observadas (surrogate variables)
-dat <- assay(rld)
-mod <- model.matrix(~ status, data = colData(dds))   # modelo completo
+# Los dos modelos que SVA compara:
+mod  <- model.matrix(~ status, data = colData(dds))  # modelo completo
 mod0 <- model.matrix(~ 1, data = colData(dds))       # modelo nulo
 
-svseq <- svaseq(counts(dds), mod, mod0)
+# svaseq NO normaliza por profundidad. Hay que darle cuentas normalizadas
+# por los size factors, o la primera SV será simplemente el library size.
+dds <- estimateSizeFactors(dds)
+dat <- counts(dds, normalized = TRUE)
+
+# Filtro de genes de expresión muy baja (recomendado en la viñeta de DESeq2)
+dat <- dat[rowMeans(dat) > 1, ]
+
+svseq <- svaseq(dat, mod, mod0)
 svseq$n.sv  # número de surrogate variables detectadas
 ```
+
+### ¿Por qué cuentas normalizadas y no `vst` o `rlog`?
+
+Ai para el PCA y el heatmap tenemos que usar datos transformados, ¿por qué aquí volvemos a las cuentas? Porque `svaseq` **hace su propia transformación por dentro**.
+
+`svaseq` corrige la heterocedasticidad (el problema 2 de la sección 5), pero **no** toca la profundidad de secuenciación (el problema 1). Si le pasas `counts(dds)` en crudo, la mayor fuente de varianza que va a encontrar es el tamaño de librería, y SV1 acabará siendo la profundidad en lugar del batch que buscas. Por eso pasamos `counts(dds, normalized = TRUE)`, que ya tiene aplicados los *size factors*.
+
+Como `svaseq` hace una transformación para corregir la heterocedasticidad, pasarle unas cuentas transformadas con `vst` o `rlog` seria como hacer doble correción.
+
+
+::: callout-tip
+## Si ya tienes los datos transformados, usa `sva()` en vez de `svaseq()`
+
+`svaseq()` y `sva()` son la misma función; la única diferencia es que svaseq hace un logaritmo `log(dat + 1)` inicial.
+
+| Datos que tienes | Función |
+|---|---|
+| Cuentas normalizadas (`counts(dds, normalized = TRUE)`) | `svaseq()` |
+| Matriz ya transformada (`assay(vsd)`, `assay(rld)`) | `sva()` |
+
+```{r}
+# Alternativa equivalente partiendo de la matriz transformada
+sv_vst <- sva(assay(vsd), mod, mod0)
+```
+:::
+
+### Interpretar el resultado
+
+Si SVA reporta `n.sv = 3`, eso **no** significa "hay 3 lotes ocultos". Las surrogate variables son componentes ortogonales del ruido, no etiquetas de variables reales. Un solo efecto técnico puede repartirse entre varias SVs, y una SV puede ser una mezcla de efectos.
+
+La forma de darles sentido es correlacionarlas con lo que sí conoces:
+
+```{r}
+sv <- svseq$sv
+colnames(sv) <- paste0("SV", seq_len(ncol(sv)))
+
+profundidad <- colSums(counts(dds))
+
+for (j in seq_len(ncol(sv))) {
+  cat("\n--- SV", j, " ---\n", sep = "")
+  cat("  cor con profundidad: ",
+      round(cor(sv[, j], profundidad), 3), "\n", sep = "")
+  cat("  R^2 ~ study        : ",
+      round(summary(lm(sv[, j] ~ colData(dds)$study))$r.squared, 3), "\n", sep = "")
+  cat("  R^2 ~ status       : ",
+      round(summary(lm(sv[, j] ~ colData(dds)$status))$r.squared, 3), "\n", sep = "")
+}
+
+```
+
+### Visualizar la regresión de SV1 sobre el estudio
+
+
+```{r}
+sv_df <- data.frame(
+  SV1    = sv[, 1],
+  study  = colData(dds)$study,
+  status = colData(dds)$status
+)
+
+# El modelo lineal: ¿cuánto de SV1 explica el estudio de origen?
+fit  <- lm(SV1 ~ study, data = sv_df)
+r2   <- summary(fit)$r.squared
+pval <- summary(fit)$coefficients[2, 4]
+
+summary(fit)
+```
+
+```{r}
+# study es categórica, así que para dibujar la recta la pasamos a 0/1
+# (0 = GSE166253, 1 = GSE202805) y reetiquetamos el eje x con los nombres.
+sv_df$study_num <- as.numeric(sv_df$study) - 1
+
+ggplot(sv_df, aes(x = study_num, y = SV1)) +
+  geom_smooth(method = "lm", formula = y ~ x, se = TRUE,
+              color = "steelblue", fill = "steelblue", alpha = 0.15) +
+  # Coloreamos por status para comprobar que NO es lo que separa a las muestras
+  geom_point(aes(color = status), size = 4,
+             position = position_jitter(width = 0.04, height = 0, seed = 1)) +
+  scale_x_continuous(breaks = c(0, 1), labels = levels(sv_df$study),
+                     limits = c(-0.25, 1.25)) +
+  labs(
+    x = "study (batch)", y = "SV1",
+    title = "Regresión de SV1 sobre el estudio de origen",
+    subtitle = sprintf("R² = %.3f   |   p = %.2e", r2, pval)
+  ) +
+  theme_bw()
+```
+
+Como `study` solo tiene dos niveles, la "recta de regresión" es simplemente la línea que une las medias de los dos grupos, y el modelo lineal equivale a una prueba t. Por eso también sirve verlo como boxplot:
+
+```{r}
+ggplot(sv_df, aes(x = study, y = SV1)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.25, fill = "steelblue") +
+  geom_jitter(aes(color = status), width = 0.12, size = 3.5) +
+  labs(x = "study (batch)", y = "SV1",
+       title = "SV1 por estudio",
+       subtitle = sprintf("R² = %.3f", r2)) +
+  theme_bw()
+```
+
+**Cómo se lee la gráfica.** Los dos grupos no se traslapan en absoluto: las 8 muestras de GSE166253 caen alrededor de SV1 ≈ +0.25 y las 8 de GSE202805 alrededor de −0.25 (R² = 0.976, p ≈ 1e-12). Y el detalle importante es el color: dentro de cada estudio las muestras `acute` y `convalescent` están completamente mezcladas. Es decir, SV1 está capturando el estudio de origen y **no** la variable biológica de interés — que es exactamente lo que uno quiere de una surrogate variable destinada a entrar como covariable de corrección.
+
+En nuestros datos SV1 corresponde casi exactamente al estudio (R² ≈ 0.98), mientras que SV2 y SV3 no corresponden a ninguna variable conocida (R² con `status` por debajo de 0.03): podemos pensar en ellas como ruido.
+
 
 ---
 
@@ -475,6 +585,48 @@ dds_corrected <- DESeqDataSetFromMatrix(
 )
 ```
 
+Para graficar el PCA no podemos pasarle `dds_corrected` directamente a `plotPCA()`: ese objeto contiene **cuentas** (corregidas, pero cuentas al fin), y `plotPCA()` espera un objeto ya transformado. Aplicamos `rlog()` igual que hicimos con los datos originales.
+
+```{r}
+# ComBat-seq devuelve cuentas, así que hay que transformarlas para visualizar
+rld_corrected_cbs <- rlog(dds_corrected, blind = TRUE)
+
+pca_cbs <- plotPCA(rld_corrected_cbs, intgroup = c("status", "study"),
+                   returnData = TRUE, ntop = nrow(rld_corrected_cbs))
+percent_var_cbs <- round(100 * attr(pca_cbs, "percentVar"))
+
+ggplot(pca_cbs, aes(x = PC1, y = PC2, color = status, shape = study)) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", percent_var_cbs[1], "% varianza")) +
+  ylab(paste0("PC2: ", percent_var_cbs[2], "% varianza")) +
+  theme_bw() +
+  ggtitle("PCA después de ComBat-seq")
+```
+
+
+
+¿Cuánto de PC1 explica el batch, antes y después de corregir?
+
+```{r}
+pca_pre <- plotPCA(rld, intgroup = c("status", "study"),
+                   returnData = TRUE, ntop = nrow(rld))
+
+cat("R² de PC1 ~ study\n")
+cat("  antes de ComBat-seq  : ",
+    round(summary(lm(pca_pre$PC1 ~ pca_pre$study))$r.squared, 3), "\n", sep = "")
+cat("  después de ComBat-seq: ",
+    round(summary(lm(pca_cbs$PC1 ~ pca_cbs$study))$r.squared, 3), "\n", sep = "")
+
+cat("\nR² de PC1 ~ status\n")
+cat("  antes de ComBat-seq  : ",
+    round(summary(lm(pca_pre$PC1 ~ pca_pre$status))$r.squared, 3), "\n", sep = "")
+cat("  después de ComBat-seq: ",
+    round(summary(lm(pca_cbs$PC1 ~ pca_cbs$status))$r.squared, 3), "\n", sep = "")
+```
+
+El R² de PC1 sobre `study` pasa de **0.925 a 0.005**, es decir el batch desaparece casi por completo del primer componente. Y al mismo tiempo la biología emerge: el R² de PC1 sobre `status` sube. Antes de corregir, el componente principal era el estudio de origen; después, es la variable que nos interesa.
+
+
 ### Opción B: limma::removeBatchEffect (para datos transformados)
 
 Esta opción se usa **solo para visualización** (PCA, heatmaps), NO para análisis diferencial. Es el mismo principio de la sección 5: los datos transformados sirven para ver, las cuentas crudas para modelar.
@@ -491,7 +643,7 @@ assay(rld_corrected) <- removeBatchEffect(
 )
 
 # Visualizar PCA corregido
-plotPCA(rld_corrected, intgroup = "status") +
+plotPCA(rld_corrected, intgroup = "status", ntop = nrow(rld_corrected)) +
   theme_bw() +
   ggtitle("PCA post-corrección de batch")
 ```
@@ -514,13 +666,10 @@ dds_batch <- DESeqDataSetFromMatrix(
 ## Guardar los datos
 
 ```{r}
-# Guardar matriz de cuentas (en la carpeta counts/ de la raíz del proyecto)
-dir.create("counts", showWarnings = FALSE)
-save(counts, file = "counts/raw_counts.RData")
-write.csv(counts, file = "counts/raw_counts.csv")
+# Guardar matriz de cuentas
 
-# Guardar objeto dds (lo usaremos en la clase 5)
-save(dds, file = "counts/dds.RData")
+save(counts, file = file.path(DIR, "data/raw_counts.RData"))
+write.csv(counts, file.path(DIR, "data/raw_counts.csv"))
 ```
 
 ---
