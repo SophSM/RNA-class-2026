@@ -30,8 +30,7 @@ gse202805 <- read_csv("data/GSE202805_metadata.csv") %>%
 
 # Combinar los dos estudios
 # Los archivos GSE*_metadata.csv contienen las muestras que seleccionamos y
-# descargamos para el curso (8 por estudio). El resultado son 16 muestras; en
-# la clase 4 la metadata se recorta automáticamente a las que sí se alinearon.
+# descargamos para el curso (8 por estudio). El resultado son 16 muestras
 metadatos_curso <- bind_rows(gse166253, gse202805)
 
 # Guardar

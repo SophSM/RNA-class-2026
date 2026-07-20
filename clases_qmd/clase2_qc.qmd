@@ -95,11 +95,15 @@ module load fastqc/0.11.3
 ```{bash}
 # Crear carpeta para los outputs
 cd rna
+pwd # en donde estoy parado?
 mkdir -p quality1
 
 # Correr FastQC en un solo archivo
-fastqc data/SRR19173185_1.fastq.gz \
-  -o quality1/
+fastqc /mnt/data/amedina/ssalazar/rna/data/SRR19173185_1.fastq.gz \ 
+-o /mnt/data/amedina/ssalazar/rna/quality1/
+
+fastqc data/SRR19173185_1.fastq.gz \ 
+-o quality1/
 
 # Correr FastQC en todos los archivos FASTQ (loop)
 for file in data/*.fastq.gz; do
@@ -219,23 +223,26 @@ Para el alineamiento usaremos solo los **trimmed** (pareados).
 
 ```{bash}
 # Crear carpeta para resultados
-mkdir -p rna/TRIM_results
+cd rna # estoy en rna
+mkdir -p TRIM_results
 
 # Correr Trimmomatic para un par de muestras
 trimmomatic PE \
   -threads 8 \
   -phred33 \
-  rna/data/SRR13639990_1.fastq.gz \
-  rna/data/SRR13639990_2.fastq.gz \
-  rna/TRIM_results/SRR12363092_1_trimmed.fq.gz \
-  rna/TRIM_results/SRR12363092_1_unpaired.fq.gz \
-  rna/TRIM_results/SRR12363092_2_trimmed.fq.gz \
-  rna/TRIM_results/SRR12363092_2_unpaired.fq.gz \
-  ILLUMINACLIP:rna/data/NexteraPE-PE.fa:5:10:5 \
+  data/SRR13639990_1.fastq.gz \
+  data/SRR13639990_2.fastq.gz \
+  TRIM_results/SRR12363092_1_trimmed.fq.gz \
+  TRIM_results/SRR12363092_1_unpaired.fq.gz \
+  TRIM_results/SRR12363092_2_trimmed.fq.gz \
+  TRIM_results/SRR12363092_2_unpaired.fq.gz \
+  ILLUMINACLIP:data/NexteraPE-PE.fa:5:10:5 \
   LEADING:3 \
   TRAILING:3 \
   SLIDINGWINDOW:4:20 \
   MINLEN:80
+  
+  
 ```
 
 ### Loop para todas las muestras
@@ -256,7 +263,7 @@ for i in *_1.fastq.gz; do
     "../TRIM_results/${base}_1_unpaired.fq.gz" \
     "../TRIM_results/${base}_2_trimmed.fq.gz" \
     "../TRIM_results/${base}_2_unpaired.fq.gz" \
-    ILLUMINACLIP:NexteraPE-PE.fa:2:30:10 \
+    ILLUMINACLIP:../data/NexteraPE-PE.fa:5:10:5 \
     LEADING:3 \
     TRAILING:3 \
     SLIDINGWINDOW:4:20 \

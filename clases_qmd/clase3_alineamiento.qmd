@@ -149,6 +149,10 @@ STAR \
 
 **Este paso puede tomar 30–60 minutos y requiere ~30 GB de RAM.**
 
+### Multi-threading
+
+![Multithread](single_vs_multithreaded_alignment.png)
+
 ---
 
 ## 5. Paso 2: Alinear lecturas con STAR

@@ -8,7 +8,8 @@
 #SBATCH -e /mnt/data/amedina/ssalazar/rna/logs/trim_%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sogusama02@gmail.com
-#SBATCH --array=0-12%4
+#SBATCH --array=0-15%4
+
 mkdir -p /mnt/data/amedina/ssalazar/rna/TRIM_results
 cd /mnt/data/amedina/ssalazar/rna/data/
 module load trimmomatic/0.33
