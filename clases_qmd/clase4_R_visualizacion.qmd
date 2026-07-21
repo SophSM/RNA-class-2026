@@ -67,6 +67,7 @@ DIR = "/Users/sofiasalazar/Desktop/GENE/RNA-class-2026"
 ```{r}
 # Rutas del proyecto
 star_dir      <- file.path(DIR,"STAR_output")
+
 metadata_file <- file.path(DIR, "data/metadatos_curso.csv")
 
 # Listar los archivos de cuentas que están dentro de STAR_output
@@ -75,13 +76,15 @@ files
 ```
 
 ```{r}
+
+
 # Construir la matriz de cuentas
 # Usamos la columna 2 (unstranded) — cambia a 4 si es stranded reverse
 counts <- c()
 
 for (i in seq_along(files)) {
   x <- read.table(file = files[i], sep = "\t", header = FALSE)
-  counts <- cbind(counts, x[, 2])
+  counts <- cbind(counts, x[ , 2])
 }
 
 # Guardamos x como referencia para los nombres de genes
@@ -100,6 +103,7 @@ colnames(counts) <- sub("_ReadsPerGene.out.tab", "", basename(files))
 
 dim(counts)
 head(counts, 3)
+
 ```
 
 ### Cargar metadatos
@@ -111,6 +115,8 @@ rownames(metadata) <- metadata$sample_id
 # Ordenar los metadatos igual que las columnas de la matriz de cuentas
 # (deben quedar las 16 muestras, 8 por estudio)
 metadata <- metadata[colnames(counts), ]
+
+all(rownames(metadata)==colnames(counts)) # TRUE
 
 # status es la variable biológica de interés (acute vs. convalescent).
 # Fijamos convalescent como nivel de referencia (denominador de las comparaciones)
@@ -135,6 +141,7 @@ head(metadata)
 - El diseño experimental (fórmula)
 
 ```{r}
+
 dds <- DESeqDataSetFromMatrix(
   countData = counts,      # Matriz de cuentas (enteros)
   colData   = metadata,    # Metadatos
@@ -560,9 +567,38 @@ En nuestros datos SV1 corresponde casi exactamente al estudio (R² ≈ 0.98), mi
 
 ## 11. Corrección de batch effects
 
+Primero construimos el objeto dds por cualquier sobre-escritura que haya ocurrido:
+
+```{r}
+counts <- c()
+
+for (i in seq_along(files)) {
+  x <- read.table(file = files[i], sep = "\t", header = FALSE)
+  counts <- cbind(counts, x[ , 2])
+}
+
+counts <- counts[-c(1:4), ]
+x <- x[-c(1:4), ]
+
+counts <- as.data.frame(counts)
+rownames(counts) <- x[, 1]
+colnames(counts) <- sub("_ReadsPerGene.out.tab", "", basename(files))
+
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,      # Matriz de cuentas (enteros)
+  colData   = metadata,    # Metadatos
+  design    = ~ status     # Fórmula: variable de interés (acute vs. convalescent)
+)
+
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep, ]
+
+```
+
 ### Opción A: ComBat-seq (para cuentas crudas)
 
 ComBat-seq trabaja con cuentas **crudas** (enteros), lo que permite usar los datos corregidos directamente en DESeq2.
+
 
 ```{r}
 library(sva)
@@ -585,7 +621,7 @@ dds_corrected <- DESeqDataSetFromMatrix(
 )
 ```
 
-Para graficar el PCA no podemos pasarle `dds_corrected` directamente a `plotPCA()`: ese objeto contiene **cuentas** (corregidas, pero cuentas al fin), y `plotPCA()` espera un objeto ya transformado. Aplicamos `rlog()` igual que hicimos con los datos originales.
+Para graficar el PCA no podemos pasarle `dds_corrected` directamente a `plotPCA()`: ese objeto contiene **cuentas crudas** (corregidas, pero cuentas al fin), y `plotPCA()` espera un objeto ya transformado. Aplicamos `rlog()` igual que hicimos con los datos originales.
 
 ```{r}
 # ComBat-seq devuelve cuentas, así que hay que transformarlas para visualizar
@@ -626,6 +662,27 @@ cat("  después de ComBat-seq: ",
 
 El R² de PC1 sobre `study` pasa de **0.925 a 0.005**, es decir el batch desaparece casi por completo del primer componente. Y al mismo tiempo la biología emerge: el R² de PC1 sobre `status` sube. Antes de corregir, el componente principal era el estudio de origen; después, es la variable que nos interesa.
 
+¿Cómo se ven las distancias entre las muestras?
+
+```{r}
+# Calcular matriz de correlación entre muestras
+sampleDists <- dist(t(assay(rld_corrected_cbs)))
+sampleDistMatrix <- as.matrix(sampleDists)
+
+# Definir colores
+colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
+
+# Heatmap
+pheatmap(
+  sampleDistMatrix,
+  clustering_distance_rows = sampleDists,
+  clustering_distance_cols = sampleDists,
+  col = colors,
+  annotation_col = as.data.frame(colData(dds)[, c("status", "study"), drop = FALSE]),
+  main = "Distancias entre muestras"
+)
+```
+
 
 ### Opción B: limma::removeBatchEffect (para datos transformados)
 
@@ -643,9 +700,17 @@ assay(rld_corrected) <- removeBatchEffect(
 )
 
 # Visualizar PCA corregido
-plotPCA(rld_corrected, intgroup = "status", ntop = nrow(rld_corrected)) +
+pca_limma <- plotPCA(rld_corrected, intgroup = c("status", "study"),
+                   returnData = TRUE, ntop = nrow(rld_corrected))
+
+percent_var_limma <- round(100 * attr(pca_limma, "percentVar"))
+
+ggplot(pca_limma, aes(x = PC1, y = PC2, color = status, shape = study)) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", percent_var_limma[1], "% varianza")) +
+  ylab(paste0("PC2: ", percent_var_limma[2], "% varianza")) +
   theme_bw() +
-  ggtitle("PCA post-corrección de batch")
+  ggtitle("PCA después de limma")
 ```
 
 ### Opción C: Incluir batch en el modelo de DESeq2
@@ -661,6 +726,83 @@ dds_batch <- DESeqDataSetFromMatrix(
 )
 ```
 
+Aquí, no podemos hacer un PCA, ya que la correción por batch se ejecuta en realidad posteriormente, durante el cálculo de expresión diferencial.
+
+
+---
+
+## 12. Heatmap de la matriz de cuentas normalizada con ComplexHeatmap
+
+`pheatmap` (secciones 8 y 11) es suficiente para un heatmap de distancias, pero `ComplexHeatmap` da más control sobre anotaciones y escalas de color, y es el estándar cuando el heatmap se vuelve más complejo (varias anotaciones, splits, heatmaps combinados). Aquí lo usamos para un heatmap simple sobre `rld_corrected`, la matriz **transformada (rlog) y corregida por batch** que calculamos en la Opción B de la sección 11 con `removeBatchEffect`.
+
+Usamos datos transformados y no cuentas crudas normalizadas porque, igual que en el PCA y el heatmap de distancias, la selección de genes más variables (`apply(..., var)`) solo tiene sentido sobre datos con la varianza ya estabilizada (sección 5); de lo contrario esos genes más "variables" serían simplemente los más expresados o los más ruidosos. Y usamos la versión corregida por batch para que el heatmap muestre el patrón biológico ya sin el efecto del estudio de origen.
+
+### Instalar ComplexHeatmap y circlize
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(c("ComplexHeatmap", "circlize"))
+```
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)   # colorRamp2, para la escala de color
+```
+
+### Obtener la matriz transformada y corregida por batch
+
+```{r}
+norm_counts <- assay(rld_corrected) # el rld corregido con limma
+
+# Escalamos por gen (z-score) para comparar patrones entre muestras
+mat_scaled <- t(scale(t(norm_counts)))
+```
+
+### ¿Por qué z-score?
+
+Un gen muy expresado y uno poco expresado ocupan rangos de valores distintos en la matriz. Si graficamos `norm_counts` tal cual, el color del heatmap va a reflejar sobre todo el **nivel de expresión** de cada gen, y no si una muestra tiene más o menos expresión que las demás **para ese gen en particular**, que es lo que realmente nos interesa para ver patrones (p. ej. qué muestras se parecen entre sí).
+
+El z-score resuelve esto: para cada gen, resta su media entre muestras y divide entre su desviación estándar. Así, todos los genes quedan en la misma escala (media 0, sd 1) y el color del heatmap pasa a significar lo mismo en cualquier fila: "cuánto por encima o por debajo del promedio de ese gen está esta muestra".
+
+Aplicamos la funcion de transposición a la matriz (`t()`) porque para sacar los z-scores necesitamos la función `scale()` en R, que **siempre centra y escala por columna**, nunca por fila. Nuestra matriz tiene genes en las filas y muestras en las columnas, pero queremos el z-score por gen (fila), no por muestra (columna). Por eso:
+
+1. `t(norm_counts)`:  transponemos para que los genes queden como columnas.
+2. `scale(...)`:  ahora sí calcula el z-score por gen, porque opera columna por columna.
+3. `t(...)` (la de afuera): transponemos de vuelta para regresar a la orientación genes-en-filas / muestras-en-columnas que espera `Heatmap()`.
+
+### Heatmap simple
+
+```{r}
+# Escala de color con colorRamp2 (circlize)
+col_fun <- colorRamp2(c(-2, 0, 2), c("#377EB8", "white", "#E41A1C"))
+col_status <- c("acute" = "#32a852", "convalescent" = "#b54f02")
+col_study <- c("GSE166253" = "#020d69", "GSE202805" = "#99a4ff" )
+# Anotación de columnas con las variables de interés
+status_annotation <- HeatmapAnnotation("Status" = metadata$status,
+                                      col = list("Status" = col_status))
+study_annotation <- HeatmapAnnotation("Study" = metadata$study,
+                                      col = list("Study" = col_study))
+
+ht <- Heatmap(
+  mat_scaled,
+  name = "z-score",
+  col = col_fun,
+  top_annotation = c(status_annotation, study_annotation),
+  show_row_names = FALSE,
+  show_row_dend = FALSE,
+  show_column_names = TRUE,
+  column_title = "Heatmap de todos los genes"
+)
+
+png(filename = file.path(DIR, "clases_qmd/full_heatmap.png"), height = 20, width = 20,
+    units = "cm", res = 500)
+draw(ht)
+dev.off()
+```
+
+![Heatmap](full_heatmap.png)
 ---
 
 ## Guardar los datos
@@ -670,6 +812,9 @@ dds_batch <- DESeqDataSetFromMatrix(
 
 save(counts, file = file.path(DIR, "data/raw_counts.RData"))
 write.csv(counts, file.path(DIR, "data/raw_counts.csv"))
+
+# Guardar el dds
+save(dds, file = file.path(DIR, "data/dds.RData"))
 ```
 
 ---
@@ -681,5 +826,3 @@ write.csv(counts, file.path(DIR, "data/raw_counts.csv"))
 - [ComBat-seq — sva package](https://bioconductor.org/packages/release/bioc/html/sva.html)
 
 - [limma removeBatchEffect](https://rdrr.io/bioc/limma/man/removeBatchEffect.html)
-
-- [Revisión de batch effects en RNA-seq](https://doi.org/10.1186/s12859-016-1270-8)

@@ -34,7 +34,7 @@ Al finalizar esta sesión podrás:
 
 ## 1. ¿Por qué DESeq2?
 
-**DESeq2** es el estándar de la industria para análisis de expresión diferencial en RNA-seq porque:
+**DESeq2** es el estándar de oro para análisis de expresión diferencial en RNA-seq porque:
 
 - Modela correctamente la distribución de los datos de RNA-seq (binomial negativa)
 
@@ -46,54 +46,39 @@ Al finalizar esta sesión podrás:
 
 ---
 
-## 2. El modelo estadístico de DESeq2
+## 2. Cargar datos de la clase anterior
 
-Para cada gen $i$ y muestra $j$, DESeq2 asume:
+```{r}
+library(DESeq2)
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
 
-$$K_{ij} \sim \text{NegativeBinomial}(\mu_{ij}, \alpha_i)$$
+DIR = "/Users/sofiasalazar/Desktop/GENE/RNA-class-2026"
+# Cargar el objeto dds de la clase 4 (ejecuta desde la raíz del proyecto)
+load(file.path(DIR,"data/dds.RData"))
+```
 
-donde:
-- $\mu_{ij}$ = media esperada de lecturas
+---
 
-- $\alpha_i$ = parámetro de dispersión del gen
-
-La media se modela como:
-
-$$\mu_{ij} = s_j \cdot q_{ij}$$
-
-donde $s_j$ es el factor de tamaño de la muestra $j$ y $q_{ij}$ es la expresión normalizada.
-
-### Normalización por DESeq2
+## 3. Normalización por DESeq2
 
 DESeq2 estima **factores de tamaño de librería** para corregir diferencias en la profundidad de secuenciación entre muestras:
 
 ```{r}
 # Ver los factores de tamaño estimados
+dds <- estimateSizeFactors(dds)
 sizeFactors(dds)
 ```
 
 Las cuentas crudas de cada muestra se dividen por su factor de tamaño. Entonces si la muestra A tiene un factor de tamaño de 2, sus cuentas crudas se dividen entre 2 para traerlo a la misma escala que las demás muestras.
 
 ---
-
-## 3. Cargar datos de la clase anterior
-
-```{r}
-library(DESeq2)
-library(ggplot2)
-library(pheatmap)
-library(dplyr)
-library(ggrepel)
-
-# Cargar el objeto dds de la clase 4 (ejecuta desde la raíz del proyecto)
-load("counts/dds.RData")
-```
-
----
-
 ## 4. Correr DESeq2
 
 ### Sin corrección de batch
+
+Asi se correría DESeq2 sin corregir por batch con las cuentas crudas.
 
 ```{r}
 # Diseño simple: solo la variable de interés
@@ -106,22 +91,22 @@ dds <- DESeq(dds)
 ### Con batch en el modelo
 
 ```{r}
+# asi podemos verificar cual es la referencia, es el primer nivel
+levels(dds$status) 
+
 # Incluir el estudio de origen (batch) en el modelo — ANTES de la variable de interés
 design(dds) <- ~ study + status
 dds <- DESeq(dds)
+
 ```
 
-```{r}
-# Con ComBat-seq (cuentas ya corregidas, sin batch en el diseño)
-# Si usamos ComBat-seq en la clase 4, el objeto dds_corrected ya tiene las
-# cuentas corregidas y solo necesitamos status en el diseño
-design(dds_corrected) <- ~ status
-dds_corrected <- DESeq(dds_corrected)
-```
+El batch tiene que ir antes de la variable de interés en el modelo, porque en el siguiente paso, para determinar el contraste, se usa la ultima variable del modelo.
 
 ---
 
 ## 5. Extraer los resultados
+
+La función `results()` extrae los p-values, log2FoldChanges y demás resultados por gen. Esto es el resultado final de un análisis de expresión diferencial.
 
 ```{r}
 # Extraer resultados comparando acute vs convalescent
@@ -135,24 +120,22 @@ res <- results(
 summary(res)
 ```
 
-```
-out of 18000 with nonzero total read count
-adjusted p-value < 0.05
-LFC > 0 (up)       : 345, 1.9%
-LFC < 0 (down)     : 289, 1.6%
-outliers [1]       : 12, 0.07%
-low counts [2]     : 2100, 12%
-```
-
 ### Shrinkage del log2FoldChange
 
 El shrinkage reduce el ruido en genes con pocas lecturas (estimaciones más conservadoras y estables):
 
 ```{r}
+BiocManager::install("apeglm") #instalamos la libreria necesaria para hacer el shrinkage
+```
+
+
+```{r}
+resultsNames(dds) # consultamos las comparaciones que se pueden hacer
+
 # Aplicar shrinkage (recomendado para visualización y ranking)
 res_shrunk <- lfcShrink(
   dds,
-  coef = "status_acute_vs_convalescent",
+  coef = "status_acute_vs_convalescent", # ponemos el nombre de la comparacion que nos interesa
   type = "apeglm"   # método recomendado
 )
 
@@ -173,9 +156,9 @@ head(as.data.frame(res_shrunk), 3)
 | `baseMean` | Promedio de cuentas normalizadas en todas las muestras |
 | `log2FoldChange` | log2(acute/convalescent) — positivo = más alto en agudo |
 | `lfcSE` | Error estándar del log2FoldChange |
-| `stat` | Estadístico de la prueba de Wald |
+| `stat` | Estadística de la prueba de Wald |
 | `pvalue` | P-valor nominal |
-| `padj` | P-valor ajustado por múltiples pruebas (FDR — Benjamini-Hochberg) |
+| `padj` | P-valor ajustado por múltiples tests (FDR / Benjamini-Hochberg) |
 
 ### Umbrales típicos
 
@@ -184,7 +167,7 @@ head(as.data.frame(res_shrunk), 3)
 # |log2FC| > 1 = al menos 2 veces de diferencia
 # padj < 0.05 = 5% de tasa de falsos descubrimientos
 
-res_df <- as.data.frame(res_shrunk) |>
+res_df <- as.data.frame(res_shrunk) %>%
   mutate(
     gene_id = rownames(res_shrunk),
     significant = !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > 1,
@@ -200,21 +183,79 @@ table(res_df$direction)
 
 ---
 
-## 7. Visualización de resultados
+## 7. Anotar los genes con nombres (biomaRt)
+
+Los identificadores en `res_df$gene_id` son IDs de Ensembl con número de versión (formato de GENCODE, p. ej. `ENSG00000000003.15`), poco legibles para interpretar biológicamente o etiquetar una gráfica. Usamos `biomaRt` para traer el símbolo (nombre) de cada gen antes de graficar.
+
+### Instalar biomaRt
+
+```{r}
+if (!require("biomaRt", quietly = TRUE))
+    BiocManager::install("biomaRt")
+```
+
+### Consultar los nombres de gen
+
+```{r}
+library(biomaRt)
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+# biomaRt busca por el ID de Ensembl SIN el número de versión de GENCODE,
+# así que lo quitamos antes de hacer la consulta (ENSG00000000003.15 -> ENSG00000000003)
+res_df$ensembl_id <- sub("\\..*", "", res_df$gene_id)
+
+gene_annot <- getBM(
+  attributes = c("ensembl_gene_id", "external_gene_name"),
+  filters    = "ensembl_gene_id",
+  values     = res_df$ensembl_id,
+  mart       = ensembl
+)
+
+# Algunos IDs tienen más de un símbolo asociado en Ensembl; nos quedamos con
+# el primero para no duplicar filas de res_df al hacer el join
+gene_annot <- gene_annot %>% distinct(ensembl_gene_id, .keep_all = TRUE)
+
+res_df <- res_df %>%
+  left_join(gene_annot, by = c("ensembl_id" = "ensembl_gene_id"))
+
+# Si un gen no tiene símbolo anotado (o biomaRt no lo encontró), usamos el gene_id original
+res_df <- res_df %>%
+  mutate(gene_name = ifelse(is.na(external_gene_name) | external_gene_name == "",
+                             gene_id, external_gene_name))
+
+# El join puede alterar los rownames del data.frame; los restauramos porque
+# secciones posteriores (heatmap) indexan por rownames(res_df)
+rownames(res_df) <- res_df$gene_id
+
+head(res_df[, c("gene_id", "gene_name", "log2FoldChange", "padj")])
+```
+
+---
+
+## 8. Visualización de resultados
 
 ### Volcano Plot
 
 ```{r}
+install.packages("ggrepel")
+```
+
+
+```{r}
+library(ggrepel)
 # Seleccionar top genes para etiquetar
-top_genes <- res_df |>
-  filter(significant) |>
+top_genes <- res_df %>%
+  filter(significant) %>%
   slice_max(abs(log2FoldChange), n = 20)
 
 ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj), color = direction)) +
   geom_point(alpha = 0.5, size = 1) +
-  geom_text_repel(data = top_genes,
-                   aes(label = gene_id),
-                   size = 3, max.overlaps = 15) +
+  geom_label_repel(data = top_genes,
+                   aes(label = gene_name),
+                   size = 3, max.overlaps = 15,
+                   fill = "white", label.size = 0.2,
+                   segment.color = "grey40") +
   scale_color_manual(values = c("Up" = "#E41A1C",
                                  "Down" = "#377EB8",
                                  "NS" = "grey60")) +
@@ -222,7 +263,7 @@ ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj), color = direction)) +
   geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
   labs(title = "Volcano plot: Agudo vs. Convaleciente",
        x = "log2 Fold Change",
-       y = "-log10(FDR)",
+       y = "-log10(adjusted p-value)",
        color = "Dirección") +
   theme_bw()
 ```
@@ -232,16 +273,33 @@ ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj), color = direction)) +
 ```{r}
 # MA plot: muestra la relación entre expresión media y fold change
 plotMA(res_shrunk,
-       ylim = c(-5, 5),
        alpha = 0.05,
        main = "MA plot: Agudo vs. Convaleciente")
 ```
 
+**Cómo se lee:** cada punto es un gen. El eje X (en escala logarítmica) es el `baseMean`: el promedio de cuentas normalizadas de ese gen a lo largo de todas las muestras, es decir, qué tan expresado está en general. El eje Y, esta el *fold change*, aunque aquí es directamente el log2FoldChange encogido, que es cuánto cambia entre `acute` y `convalescent`. Los puntos en azul son los genes significativos al `alpha` que le diste (0.05); el resto queda en gris.
+
+Por el shrinkage (sección 5), los genes con `baseMean` bajo (hacia la izquierda) tienen su log2FoldChange comprimido hacia 0, DESeq2 desconfía de fold changes grandes cuando hay pocas cuentas, porque el ruido de muestreo los infla artificialmente. Los genes muy expresados (a la derecha) pueden mostrar fold changes grandes con más confianza, porque hay más evidencia detrás de la estimación. Por eso la nube de puntos tiene esa forma de "embudo" que se abre hacia la derecha.
+
 ### Heatmap de genes significativos
 
-```{r}
-library(pheatmap)
+#### Instalar ComplexHeatmap y circlize
 
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(c("ComplexHeatmap", "circlize"))
+```
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)   # colorRamp2, para la escala de color
+```
+
+#### Obtener la matriz de genes significativos
+
+```{r}
 # Genes significativos
 sig_genes <- rownames(res_df[res_df$significant & !is.na(res_df$significant), ])
 
@@ -254,26 +312,96 @@ rld <- rlog(dds, blind = FALSE)
 # Extraer la matriz de expresión de los genes significativos
 mat <- assay(rld)[sig_genes, ]
 
-# Centrar por fila (z-score)
+# Centrar por gen (z-score): ver la explicación en la clase 4, sección 12
 mat_scaled <- t(scale(t(mat)))
 
-# Anotaciones de columnas
-annotation_col <- as.data.frame(colData(dds)[, c("status", "study"), drop = FALSE])
+# Usamos el símbolo del gen (sección 7) en vez del ID de Ensembl para las etiquetas
+gene_labels <- res_df[sig_genes, "gene_name"]
 
-pheatmap(
+# log2FoldChange de cada gen, para anotar las filas del heatmap
+log2fc <- res_df[sig_genes, "log2FoldChange"]
+```
+
+#### Heatmap simple
+
+```{r}
+# Escala de color con colorRamp2 (circlize)
+col_fun <- colorRamp2(c(-2, 0, 2), c("#377EB8", "white", "#E41A1C"))
+
+col_status <- c("acute" = "#32a852", "convalescent" = "#b54f02")
+col_study  <- c("GSE166253" = "#020d69", "GSE202805" = "#99a4ff")
+
+# Anotación de columnas con las variables de interés
+status_annotation <- HeatmapAnnotation("Status" = colData(dds)$status,
+                                      col = list("Status" = col_status))
+study_annotation <- HeatmapAnnotation("Study" = colData(dds)$study,
+                                      col = list("Study" = col_study))
+
+# Anotación de fila con el log2FoldChange de cada gen (escala simétrica según
+# el máximo absoluto, para que 0 quede en el centro de la paleta de color)
+max_lfc <- max(abs(log2fc), na.rm = TRUE)
+col_log2fc <- colorRamp2(c(-max_lfc, 0, max_lfc), c("#377EB8", "lightyellow", "#E41A1C"))
+
+lfc_annotation <- rowAnnotation(
+  "log2FC" = log2fc,
+  col = list("log2FC" = col_log2fc)
+)
+
+Heatmap(
   mat_scaled,
-  annotation_col = annotation_col,
-  show_rownames = nrow(mat_scaled) < 50,   # solo si hay pocos genes
-  cluster_rows = TRUE,
-  cluster_cols = TRUE,
-  color = colorRampPalette(c("#3B4CC0", "white", "#B40426"))(100),
-  main = "Genes diferencialmente expresados"
+  name = "z-score",
+  col = col_fun,
+  top_annotation = c(status_annotation, study_annotation),
+  right_annotation = lfc_annotation,
+  row_labels = gene_labels,
+  show_row_names = nrow(mat_scaled) < 50,   # solo si hay pocos genes
+  show_row_dend = FALSE,
+  show_column_names = TRUE,
+  column_title = "Genes diferencialmente expresados"
+)
+```
+
+#### Heatmap con los top 20 genes (por log2FoldChange)
+
+El heatmap anterior incluye todos los genes significativos, que pueden ser cientos y difíciles de leer con los nombres de fila ocultos. Aquí hacemos una segunda versión solo con los 20 genes de mayor cambio absoluto (mismo criterio que usamos para etiquetar el volcano plot), donde sí tiene sentido mostrar los nombres de cada gen.
+
+```{r}
+# Los mismos 20 genes que se etiquetaron en el volcano plot
+top20_genes <- res_df %>%
+  filter(significant) %>%
+  slice_max(abs(log2FoldChange), n = 20) %>%
+  pull(gene_id)
+
+# Subconjunto de la matriz ya escalada (el z-score es por gen, así que no
+# cambia si tomamos un subconjunto de filas después de calcularlo)
+mat_top20 <- mat_scaled[top20_genes, ]
+gene_labels_top20 <- res_df[top20_genes, "gene_name"]
+log2fc_top20 <- res_df[top20_genes, "log2FoldChange"]
+
+# Reutilizamos la misma escala de color de log2FC del heatmap completo,
+# para que los colores sean comparables entre las dos gráficas
+lfc_annotation_top20 <- rowAnnotation(
+  "log2FC" = log2fc_top20,
+  col = list("log2FC" = col_log2fc)
+)
+
+Heatmap(
+  mat_top20,
+  name = "z-score",
+  col = col_fun,
+  top_annotation = c(status_annotation, study_annotation),
+  right_annotation = lfc_annotation_top20,
+  row_labels = gene_labels_top20,
+  show_row_names = TRUE,
+  show_row_dend = TRUE,
+  show_column_names = TRUE,
+  column_title = "Top 20 genes más diferencialmente expresados"
 )
 ```
 
 ---
 
-## 8. Retomar: batch correction en DESeq2
+## 9. Retomar: batch correction en DESeq2
 
 ### ¿Cuándo usar cada estrategia?
 
@@ -285,7 +413,7 @@ pheatmap(
 
 ### Con ComBat-seq (cuentas corregidas)
 
-```{r}
+```{r eval=FALSE}
 # Si usaste ComBat-seq en la clase 4
 dds_cb <- DESeqDataSetFromMatrix(
   countData = counts_corrected,  # cuentas corregidas por ComBat-seq
@@ -304,7 +432,7 @@ res_cb <- results(dds_cb,
 
 Con SVA podemos inferir los batch effects si se sospecha de alguno pero no se tienen los metadatos. Sin embargo esto tiende a sobrecorregir y eliminar efectos que tal vez sí son interesantes para el estudio.
  
-```{r}
+```{r eval=FALSE}
 library(sva)
 
 # Estimar surrogate variables
@@ -331,44 +459,43 @@ dds <- DESeq(dds)
 
 ---
 
-## 9. Exportar la lista de genes
+## 10. Exportar la lista de genes
 
 ```{r}
 # Filtrar genes significativos y ordenar por padj
-results_final <- res_df |>
-  filter(!is.na(padj)) |>
-  arrange(padj) |>
-  select(gene_id, baseMean, log2FoldChange, lfcSE, pvalue, padj, direction)
+results_final <- res_df %>%
+  filter(!is.na(padj)) %>%
+  arrange(padj) %>%
+  select(gene_id, baseMean, log2FoldChange, lfcSE, pvalue, padj, direction, significant)
 
 # Ver los top 20
 head(results_final, 20)
 
 # Guardar todos los genes (con y sin significancia) en la carpeta results/
-dir.create("results", showWarnings = FALSE)
 write.csv(results_final,
-          file = "results/resultados_acute_vs_convalescent.csv",
+          file = file.path(DIR,"data/resultados_acute_vs_convalescent.csv"),
           row.names = FALSE)
 
 # Guardar solo los genes significativos
-write.csv(results_final |> filter(significant == TRUE),
-          file = "results/DEGs_acute_vs_convalescent_sig.csv",
+write.csv(results_final %>% filter(significant == TRUE),
+          file = file.path(DIR,"data/DEGs_acute_vs_convalescent_sig.csv"),
           row.names = FALSE)
 ```
 
 ---
 
-## 10. Lista final de genes
+## 11. Lista final de genes
 
 El archivo de resultados tiene el siguiente formato:
 
-```
-gene_id             baseMean  log2FoldChange  lfcSE    pvalue      padj       direction
-ENSG00000000003.15  1823.4    2.34            0.18     1.2e-25    3.4e-22    Up
-ENSG00000000419.12  456.7    -1.89            0.22     5.6e-18    8.1e-15    Down
-...
+```{r}
+head(results_final)
 ```
 
 **Interpretación:**
+
+El log2FoldChange mide la magnitud del cambio de la condición de interés en comparación a la referencia en una escala de log2. De esta forma, si el lfc = 1, entonces 2^1 = 2x más expresado. De esta forma es más facil decir si la expresión de un gen si duplicó o se dividió entre 2.
+
 - `log2FoldChange = 2.34` → el gen está ~5x más expresado en agudo vs. convaleciente
 - `log2FoldChange = -1.89` → el gen está ~3.7x menos expresado en agudo
 - `padj < 0.05` → significativo después de corrección por múltiples pruebas
